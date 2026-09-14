@@ -72,10 +72,10 @@ Assessment section B1 (20 points) and the room half of D1.
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| RM-1 | Create Room, Join Room, Leave Room, Get Room Details and participant list, Share a selected Draft with the room — as REST APIs | Design and implement the five room endpoints with consistent resource naming, status codes, request/response shapes and error envelope | OpenAPI/Swagger document (also scored in F); integration tests per endpoint | 5 (REST API design) |
-| RM-2 | Authoritative room state | The Node.js service owns room state: membership, owner, room status. Clients never assert state; every mutation goes through the server which then broadcasts. Serialize mutations per room | Test: concurrent join/leave against one room converge to one correct participant list. Demo: second client's view matches the server's `room_state` | 5 (Authoritative room state) |
-| RM-3 | Validation and invalid-operation handling | Validate every request and reject invalid operations with distinct errors: join a non-existent room, join twice, leave a room you are not in, share a Draft you do not own, act on a room you are not a member of, malformed payloads | Unit + integration tests asserting status code and error code per invalid operation. Demo checklist item 11: trigger one expected failure and explain the handling | 5 (Validation and invalid-operation handling) |
-| RM-4 | Room and membership data model | Model Room and RoomMember (see Database group) with owner, status, timestamps and per-member connection state | Schema/migration files and the database diagram (F deliverable) | 5 (Room and membership data model) |
+| [x] RM-1 | Create Room, Join Room, Leave Room, Get Room Details and participant list, Share a selected Draft with the room — as REST APIs | Design and implement the five room endpoints with consistent resource naming, status codes, request/response shapes and error envelope | OpenAPI/Swagger document (also scored in F); integration tests per endpoint | 5 (REST API design) |
+| [x] RM-2 | Authoritative room state | The Node.js service owns room state: membership, owner, room status. Clients never assert state; every mutation goes through the server which then broadcasts. Serialize mutations per room | Test: concurrent join/leave against one room converge to one correct participant list. Demo: second client's view matches the server's `room_state` | 5 (Authoritative room state) |
+| [x] RM-3 | Validation and invalid-operation handling | Validate every request and handle invalid operations with distinct errors: join a non-existent room (404), leave a room you are not in (403), share a Draft you do not own (403), act on a room you are not a member of (403), malformed payloads (400). Joining twice is **handled idempotently** (200, no duplicate membership) rather than rejected — see ARCHITECTURE.md §4.1 | Unit + integration tests asserting status code and error code per invalid operation. Demo checklist item 11: trigger one expected failure and explain the handling | 5 (Validation and invalid-operation handling) |
+| [x] RM-4 | Room and membership data model | Model Room and RoomMember (see Database group) with owner, status, timestamps and per-member connection state | Schema/migration files and the database diagram (F deliverable) | 5 (Room and membership data model) |
 
 ---
 
@@ -155,11 +155,11 @@ themselves are scored under B1 (RM-1).
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| BA-1 | Create Room | Implement the endpoint with owner assignment and initial room status | Integration test + OpenAPI entry | scored via RM-1 / D3 |
-| BA-2 | Join Room | Implement join with membership creation and `user_joined` broadcast | Integration test asserting membership row and broadcast | scored via RM-1 / D3 |
-| BA-3 | Leave Room | Implement leave with membership cleanup and `user_left` broadcast | Integration test covering leave and the disconnect path | scored via RM-1 / D3 |
-| BA-4 | Get Room State | Implement the authoritative room snapshot including participants and any active spin | Test that the REST snapshot matches the `room_state` socket payload | scored via RM-1 / D3 |
-| BA-5 | Share Draft | Implement sharing a Draft into a room (Draft metadata and hosted file location per the Draft entity) with `draft_shared` broadcast | Demo checklist item 5; integration test | scored via RM-1 / D3 |
+| [x] BA-1 | Create Room | Implement the endpoint with owner assignment and initial room status | Integration test + OpenAPI entry | scored via RM-1 / D3 |
+| [~] BA-2 | Join Room | Implement join with membership creation and `user_joined` broadcast | Integration test asserting membership row and broadcast | scored via RM-1 / D3 |
+| [~] BA-3 | Leave Room | Implement leave with membership cleanup and `user_left` broadcast | Integration test covering leave and the disconnect path | scored via RM-1 / D3 |
+| [~] BA-4 | Get Room State | Implement the authoritative room snapshot including participants and any active spin | Test that the REST snapshot matches the `room_state` socket payload | scored via RM-1 / D3 |
+| [~] BA-5 | Share Draft | Implement sharing a Draft into a room (Draft metadata and hosted file location per the Draft entity) with `draft_shared` broadcast | Demo checklist item 5; integration test | scored via RM-1 / D3 |
 | BA-6 | Start Spin | Implement the spin-start endpoint delegating to the Spin Engine validation (SP-1) | Tests from SP-1; demo checklist item 6 | scored via C2 / D3 |
 | BA-7 | Get Spin State or Result | Implement retrieval of live spin state and final result including the persisted event sequence (user journey step 8) | Test: fetch mid-spin and post-spin; assert result matches broadcast events | scored via C2 / D3 |
 | [x] BA-8 | Health / readiness endpoint | Implement health and readiness endpoints reporting process and dependency (database) status | Used by the cloud deployment health check (CL-3) and demo checklist item 10 | scored via D3 / E |
@@ -369,6 +369,46 @@ only one per spin. Corrected to `$type: 'number'`, with a regression test.
 **Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (16/16), `npm run test:integration`
 (64/64), `npm run build` (33 modules), plus direct inspection of the created indexes in MongoDB.
 
-### Phase 3 — Room REST APIs and WebSocket room logic (not started)
+### Phase 3 — Room REST API and room services (complete)
 
-RM-1..RM-4, BA-1..BA-5, WS-1..WS-3 and WS-7..WS-11.
+Five required room endpoints plus two supporting ones, a service layer holding the business rules, and
+DTO projection. No WebSocket room events and no spin logic.
+
+| Item | Status | What exists / what is still missing |
+|---|---|---|
+| RM-1 | `[x]` | All five room operations as REST endpoints with consistent nesting, status codes and error envelope |
+| RM-2 | `[x]` | The service owns room state; clients assert nothing. Concurrency settled by unique partial indexes, proven by concurrent join and share tests |
+| RM-3 | `[x]` | Distinct codes for every invalid operation; malformed ids rejected at the boundary so 404 means "does not exist" |
+| RM-4 | `[x]` | Room and membership model in use, with the two-axis membership/connection state exposed in room state |
+| BA-1 | `[x]` | Create Room — caller becomes owner and first member |
+| BA-2 | `[~]` | Join Room implemented and idempotent. The `user_joined` **broadcast** is Phase 4 |
+| BA-3 | `[~]` | Leave Room implemented. The `user_left` **broadcast** is Phase 4 |
+| BA-4 | `[~]` | Get Room State returns the full snapshot. `activeSpin` is present but always `null` until the spin engine exists; matching it against the `room_state` socket payload is Phase 4 |
+| BA-5 | `[~]` | Share Draft implemented and idempotent. The `draft_shared` **broadcast** is Phase 4 |
+
+**Caller identity.** `X-User-Id` header naming an existing user, verified by middleware. This is an
+assessment/demo stand-in, explicitly **not** authentication — no credential, signature or session. It
+is isolated in one middleware so real authentication could replace it without touching any service.
+`POST /users` and `POST`/`GET /drafts` are supporting endpoints added so the required endpoints are
+usable at all.
+
+**Idempotency.** Join and Share return 201 when they created something and 200 when the caller's
+desired state already held. The service pre-check is only a fast path; the unique partial indexes are
+the actual concurrency guarantee, and a lost race is folded into the same idempotent success.
+
+**Phase 3 limitation — owner leaving.** The owner may leave, the room stays `ACTIVE`, and ownership
+does not transfer. No owner-only operation exists until Start Spin, so the rule is decided in Phase 4
+where SP-14 (admin disconnect) is scored.
+
+**Defect found and fixed.** Mounting the room router at the application root meant its
+`currentUser` middleware intercepted *every* unmatched path, so unknown routes returned 401 instead of
+404 — a Phase 1 regression caught by the existing 404 test. Routers are now mounted under `/rooms`,
+`/drafts` and `/users` so unmatched paths still reach the 404 handler.
+
+**Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (34/34), `npm run test:integration`
+(99/99), `npm run build` (47 modules), `npm audit` (0), plus a live end-to-end run against a real
+server confirming the 201/200 idempotency and the DTO shape.
+
+### Phase 4 — WebSocket room events and the spin engine (not started)
+
+WS-1..WS-11, SP-1..SP-17, BA-6, BA-7.

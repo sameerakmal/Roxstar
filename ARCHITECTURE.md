@@ -239,11 +239,13 @@ All eight D1 endpoints, documented in OpenAPI/Swagger under `/docs/api`.
 
 | Method | Path | D1 requirement | Purpose |
 |---|---|---|---|
-| `POST` | `/rooms` | Create Room | Create a room; caller becomes owner |
-| `POST` | `/rooms/{roomId}/join` | Join Room | Add caller as a member; triggers `user_joined` |
-| `POST` | `/rooms/{roomId}/leave` | Leave Room | Remove caller's membership; triggers `user_left` |
-| `GET` | `/rooms/{roomId}` | Get Room State | Authoritative room snapshot: room, participants, shared drafts, active spin |
-| `POST` | `/rooms/{roomId}/drafts` | Share Draft | Share a selected Draft into the room; triggers `draft_shared` |
+| `POST` | `/rooms` | Create Room | Create a room; caller becomes owner and first member (201) |
+| `POST` | `/rooms/{roomId}/join` | Join Room | Add caller as a member; 201 created / 200 already a member; triggers `user_joined` |
+| `POST` | `/rooms/{roomId}/leave` | Leave Room | Remove caller's membership (200); triggers `user_left` |
+| `GET` | `/rooms/{roomId}` | Get Room State | Authoritative room snapshot: room, participants, shared drafts, active spin. Requires active membership |
+| `POST` | `/rooms/{roomId}/drafts` | Share Draft | Share a selected Draft into the room; 201 shared / 200 already shared; triggers `draft_shared` |
+| `POST` | `/users` | *(supporting)* | Creates a user identity so the endpoints above have a caller |
+| `POST`/`GET` | `/drafts` | *(supporting)* | Registers and lists draft metadata, so a draft exists to share |
 | `POST` | `/rooms/{roomId}/spins` | Start Spin | Owner/admin starts a spin; triggers `spin_started` |
 | `GET` | `/spins/{spinId}` | Get Spin State or Result | Live spin state or final result with the persisted event sequence |
 | `GET` | `/health`, `/ready` | Health / readiness endpoint | Liveness and dependency readiness for deployment health checks |
@@ -253,16 +255,33 @@ All eight D1 endpoints, documented in OpenAPI/Swagger under `/docs/api`.
 - **Resource nesting** mirrors ownership: spins and draft shares are subordinate to a room.
 - **Consistent error envelope** on every failure: a stable machine-readable `code`, a human-readable
   `message`, and field-level details for validation errors. Distinct codes per invalid operation
-  (room not found, already a member, not a member, not the owner, spin already active, too few
+  (room not found, not a member, not the draft owner, room closed, spin already active, too few
   players, too many players) so the client can present the right state — this is what B1's
   "validation and invalid-operation handling" and D3's "validation, error handling" are scored on.
-- **Idempotency** on the retry-prone mutations — Start Spin, Join Room and Share Draft — so a client
+- **Idempotency** on the retry-prone mutations — Join Room, Share Draft and Start Spin — so a client
   retry or a duplicate tap cannot create a second spin or a duplicate membership (D3 idempotency;
-  C4 duplicate start requests).
+  C4 duplicate start requests). Join and Share return **201** when the request created something and
+  **200** when the caller's desired state already held; neither is an error. "Already a member" is
+  therefore a success, not a distinct error code, and the database's unique partial indexes remain the
+  backstop that makes this safe under concurrency.
 - **State-changing responses return the new authoritative state**, so a client is never left guessing
   between the response and the broadcast that follows.
 
-### 4.2 REST / WebSocket division of labour
+### 4.2 Caller identity (assessment simplification)
+
+The assessment defines no authentication requirement and no scoring item covers it, so none is built.
+Instead the caller states its identity with an **`X-User-Id` header** holding an existing User id; a
+middleware verifies the user exists and rejects a missing (401), malformed (400) or unknown (401) id.
+
+**This is a demo identity mechanism, not authentication.** There is no credential, signature or
+session, so any client may claim any identity. It is isolated in `middleware/currentUser.ts` precisely
+so it can be replaced by a real authentication step without touching any service: everything
+downstream reads the caller from `req.currentUserId`.
+
+`POST /users` and `POST /drafts` exist only to make the assessment's required endpoints usable — a
+room needs callers, and Share Draft needs a draft that already exists.
+
+### 4.3 REST / WebSocket division of labour
 
 REST performs the mutation and returns the caller's result; the WebSocket layer informs *everyone
 else* in the room. The two never disagree because the broadcast is emitted from the service layer
@@ -327,6 +346,12 @@ sufficient for the required flows:
 ACTIVE   — room exists and accepts joins, leaves, draft shares and spin starts
 CLOSED   — room no longer accepts operations
 ```
+
+**Phase 3 limitation — the owner leaving.** The owner may leave; the room stays `ACTIVE` and
+ownership does **not** transfer to another member. Nothing in the assessment specifies an
+owner-departure rule, and the only owner-restricted operation (Start Spin) does not exist until
+Phase 4 — so no behaviour is invented here. The related spin-time case (TASKS SP-14, admin disconnect
+during a running spin) is decided in Phase 4 where it is scored.
 
 ### 6.2 Member connection state
 

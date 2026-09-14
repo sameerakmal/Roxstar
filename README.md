@@ -8,8 +8,8 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 
 ## Status
 
-This repository is being built in phases. **Phases 1-2 are complete** (backend foundation; database
-models and repositories).
+This repository is being built in phases. **Phases 1-3 are complete** (backend foundation; database
+models and repositories; room REST API and services).
 
 | Area | Status |
 |---|---|
@@ -19,12 +19,13 @@ models and repositories).
 | Backend: MongoDB connection via Mongoose | Done, verified against a live instance |
 | `/health` and `/ready` endpoints | Done |
 | Database models, indexes and repositories | Done — 8 models, 13 indexes, repository layer |
-| Test harness (Vitest + Supertest) | Done — 16 unit, 64 integration |
+| Room REST API (create/join/leave/state/share draft) | Done — services, DTOs, domain errors |
+| Test harness (Vitest + Supertest) | Done — 34 unit, 99 integration |
 | Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| Room APIs, WebSocket room logic, spin engine, Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
+| WebSocket room events, spin engine, Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
 
-The data model for rooms, drafts and spins exists, but no room API, WebSocket room logic, spin engine
-or Android code is implemented yet.
+Rooms, membership and draft sharing work over REST. No WebSocket room events, spin engine or Android
+code is implemented yet — room mutations are persisted but not yet broadcast.
 
 ## Technology stack
 
@@ -159,6 +160,81 @@ runs explicitly at startup, before the server accepts traffic.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) §3 for the full entity, relationship and index design.
 
+## API
+
+### Caller identity — demo mechanism, not authentication
+
+Every endpoint except `POST /users` requires an **`X-User-Id`** header naming an existing user:
+
+```bash
+curl -X POST http://localhost:3000/users -H 'Content-Type: application/json'   -d '{"displayName":"Ada"}'
+# -> {"id":"...","displayName":"Ada", ...}
+
+curl -X POST http://localhost:3000/rooms -H "X-User-Id: <that id>"
+```
+
+> **This is an assessment/demo identity stand-in and provides no security.** There is no credential,
+> signature or session, so any client can claim any identity. The assessment requires no
+> authentication, so no JWT/session/OAuth infrastructure was introduced. It lives in one middleware
+> (`src/middleware/currentUser.ts`) so a real authentication step could replace it without changing
+> any service.
+
+### Endpoints
+
+| Method | Path | Purpose | Success |
+|---|---|---|---|
+| `POST` | `/users` | Create a user identity *(supporting)* | 201 |
+| `POST` | `/drafts` | Register draft metadata *(supporting)* | 201 |
+| `GET` | `/drafts` | List the caller's own drafts *(supporting)* | 200 |
+| `POST` | `/rooms` | Create a room; caller becomes owner and first member | 201 |
+| `GET` | `/rooms/:roomId` | Authoritative room snapshot — **members only** | 200 |
+| `POST` | `/rooms/:roomId/join` | Join a room | **201** joined / **200** already a member |
+| `POST` | `/rooms/:roomId/leave` | Leave a room | 200 |
+| `POST` | `/rooms/:roomId/drafts` | Share one of your drafts into the room | **201** shared / **200** already shared |
+
+Join and Share are **idempotent**: a retry or duplicate tap returns 200 with the current state rather
+than an error, and the unique partial indexes guarantee no duplicate row even under concurrent
+requests.
+
+### Error codes
+
+| Code | Status | Meaning |
+|---|---|---|
+| `MISSING_USER_ID` / `UNKNOWN_USER` | 401 | No `X-User-Id`, or it names no user |
+| `INVALID_USER_ID` / `VALIDATION_ERROR` | 400 | Malformed id or body (with field details) |
+| `NOT_A_MEMBER` | 403 | Caller is not an active member of the room |
+| `DRAFT_NOT_OWNED` | 403 | Caller does not own the draft they tried to share |
+| `ROOM_NOT_FOUND` / `DRAFT_NOT_FOUND` | 404 | No such room or draft |
+| `ROOM_CLOSED` | 409 | Room no longer accepts the operation |
+
+### Room state
+
+`GET /rooms/:roomId` returns the authoritative snapshot. `activeSpin` is always `null` until the spin
+engine lands in Phase 4; the field is present so its shape is stable.
+
+```json
+{
+  "room": { "id": "...", "status": "ACTIVE", "ownerUserId": "...", "createdAt": "...", "updatedAt": "..." },
+  "participants": [
+    { "userId": "...", "displayName": "Ada", "membershipState": "JOINED",
+      "connectionState": "DISCONNECTED", "joinedAt": "..." }
+  ],
+  "sharedDrafts": [
+    { "draftId": "...", "name": "Take 1", "durationMs": 4200, "effect": "ECHO",
+      "fileLocation": "/drafts/1.wav", "sharedByUserId": "...", "sharedAt": "..." }
+  ],
+  "activeSpin": null
+}
+```
+
+Responses expose no Mongoose internals — no `_id`, no `__v` — and identifiers are strings.
+
+### Known Phase 3 limitation
+
+The room **owner may leave** and the room stays `ACTIVE`; ownership does not transfer. The assessment
+specifies no owner-departure rule, and the only owner-restricted operation (Start Spin) arrives in
+Phase 4, where the related admin-disconnect case is decided.
+
 ## Error format
 
 Every error response uses one envelope, including the `/ready` 503:
@@ -186,19 +262,20 @@ npm test
 The suites are split so the fast one has no external dependencies:
 
 ```bash
-npm test               # 16 unit tests, no database needed
-npm run test:integration   # 64 integration tests, needs MongoDB
+npm test               # 34 unit tests, no database needed
+npm run test:integration   # 99 integration tests, needs MongoDB
 npm run test:all           # both
 ```
 
-**Unit** covers `/health`, both `/ready` branches, 404 handling, the error envelope, config validation
-and a Socket.IO connection smoke test — the Express app is built without a database connection, and
+**Unit** covers `/health`, both `/ready` branches, 404 handling, the error envelope, config validation,
+request-validation schemas, domain-error mapping and a Socket.IO connection smoke test — the Express app is built without a database connection, and
 readiness is tested against a stubbed connection state.
 
 **Integration** runs against a real MongoDB, using a separate `roxstar_test` database (override with
 `MONGODB_TEST_URI`) that is cleared between tests and dropped at the end, so development data is never
 touched. It covers schema validation, every unique and partial index, the repository layer, and a
-concurrency test proving that two simultaneous spin creations produce exactly one active spin.
+concurrency tests proving that simultaneous spin creations, room joins and draft shares each produce
+exactly one row.
 
 ## Building for production
 

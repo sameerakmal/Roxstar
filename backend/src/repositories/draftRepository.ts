@@ -66,6 +66,25 @@ export async function shareDraftWithRoom(
   }
 }
 
+// Hydrates draft metadata for the drafts shared into a room, in one query rather
+// than one lookup per share.
+export async function findDraftsByIds(draftIds: Types.ObjectId[]): Promise<DraftRecord[]> {
+  return DraftModel.find({ _id: { $in: draftIds } })
+    .lean<DraftRecord[]>()
+    .exec();
+}
+
+// Lets the service return the existing share for an idempotent repeat instead of
+// surfacing a duplicate-key failure.
+export async function findShare(
+  roomId: Types.ObjectId,
+  draftId: Types.ObjectId,
+): Promise<RoomDraftShareRecord | null> {
+  return RoomDraftShareModel.findOne({ roomId, draftId })
+    .lean<RoomDraftShareRecord>()
+    .exec();
+}
+
 export async function findSharedDrafts(roomId: Types.ObjectId): Promise<RoomDraftShareRecord[]> {
   return RoomDraftShareModel.find({ roomId })
     .sort({ sharedAt: -1 })
