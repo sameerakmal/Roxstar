@@ -8,20 +8,23 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 
 ## Status
 
-This repository is being built in phases. **Phase 1 (project and backend foundation) is complete.**
+This repository is being built in phases. **Phases 1-2 are complete** (backend foundation; database
+models and repositories).
 
 | Area | Status |
 |---|---|
 | Repository skeleton, git, `.gitignore` | Done |
 | Backend: TypeScript, Express, error handling, config | Done |
 | Backend: Socket.IO server initialization | Done (connection logging only — no room or spin events yet) |
-| Backend: MongoDB connection via Mongoose | Done, verified against a live instance (connection layer only — **no models yet**) |
+| Backend: MongoDB connection via Mongoose | Done, verified against a live instance |
 | `/health` and `/ready` endpoints | Done |
-| Test harness (Vitest + Supertest) | Done — 6 tests |
+| Database models, indexes and repositories | Done — 8 models, 13 indexes, repository layer |
+| Test harness (Vitest + Supertest) | Done — 16 unit, 64 integration |
 | Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| Rooms, drafts, spin wheel, Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
+| Room APIs, WebSocket room logic, spin engine, Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
 
-Nothing in the room, draft, spin, or Android sections of the assessment is implemented yet.
+The data model for rooms, drafts and spins exists, but no room API, WebSocket room logic, spin engine
+or Android code is implemented yet.
 
 ## Technology stack
 
@@ -115,8 +118,10 @@ Run from `backend/`:
 | `npm run dev` | Start in watch mode |
 | `npm run build` | Compile TypeScript to `dist/` |
 | `npm start` | Run the compiled build (requires `npm run build` first) |
-| `npm test` | Run the test suite once |
-| `npm run test:watch` | Run tests in watch mode |
+| `npm test` | Unit tests — no database required |
+| `npm run test:integration` | Integration tests — **requires MongoDB running** |
+| `npm run test:all` | Both suites |
+| `npm run test:watch` | Unit tests in watch mode |
 | `npm run typecheck` | Type-check `src` and `tests` without emitting |
 | `npm run lint` | Lint with ESLint |
 
@@ -133,6 +138,26 @@ the database is down, without killing an otherwise healthy process). The contain
 `backend/Dockerfile` targets `/ready`, since Docker's single health signal governs traffic readiness.
 
 Business endpoints (rooms, drafts, spins) arrive in later phases.
+
+## Data model
+
+Eight MongoDB collections (`User`, `Room`, `RoomMember`, `Draft`, `RoomDraftShare`, `Spin`,
+`SpinParticipant`, `SpinEvent`), defined as Mongoose schemas in `backend/src/models/`. All queries live
+in `backend/src/repositories/` — models carry structure and constraints only, never query logic.
+
+Three invariants are enforced by **unique partial indexes**, so they hold even under concurrent
+requests rather than depending on application-level checks:
+
+| Invariant | Index |
+|---|---|
+| One active spin per room | `Spin{ roomId }` where `status ∈ {WAITING, RUNNING}` |
+| One active membership per user per room | `RoomMember{ roomId, userId }` where `membershipState = JOINED` |
+| Unique elimination order within a spin | `SpinParticipant{ spinId, eliminationOrder }` where the order is a number |
+
+Indexes are **not** built implicitly: the connection sets `autoIndex: false` and `syncAllIndexes()`
+runs explicitly at startup, before the server accepts traffic.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) §3 for the full entity, relationship and index design.
 
 ## Error format
 
@@ -158,9 +183,22 @@ cd backend
 npm test
 ```
 
-The suite covers `/health`, both `/ready` branches, 404 handling, the error envelope, and a Socket.IO
-connection smoke test. It needs **no running MongoDB** — the Express app is constructed without a
-database connection, and readiness is tested against a stubbed connection state.
+The suites are split so the fast one has no external dependencies:
+
+```bash
+npm test               # 16 unit tests, no database needed
+npm run test:integration   # 64 integration tests, needs MongoDB
+npm run test:all           # both
+```
+
+**Unit** covers `/health`, both `/ready` branches, 404 handling, the error envelope, config validation
+and a Socket.IO connection smoke test — the Express app is built without a database connection, and
+readiness is tested against a stubbed connection state.
+
+**Integration** runs against a real MongoDB, using a separate `roxstar_test` database (override with
+`MONGODB_TEST_URI`) that is cleared between tests and dropped at the end, so development data is never
+touched. It covers schema validation, every unique and partial index, the repository layer, and a
+concurrency test proving that two simultaneous spin creations produce exactly one active spin.
 
 ## Building for production
 

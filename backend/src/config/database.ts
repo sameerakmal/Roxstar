@@ -15,7 +15,9 @@ export async function connectDatabase(uri: string): Promise<void> {
     logger.error({ err: error }, 'MongoDB connection error');
   });
 
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
+  // autoIndex is disabled so index builds never happen implicitly on a production
+  // boot. Indexes are created explicitly via syncAllIndexes() after connecting.
+  await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000, autoIndex: false });
 }
 
 export async function disconnectDatabase(): Promise<void> {

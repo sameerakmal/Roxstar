@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from '../src/config/index.js';
+import { loadConfig } from '../../src/config/index.js';
 
 const validEnv = {
   NODE_ENV: 'production',

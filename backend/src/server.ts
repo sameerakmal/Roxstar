@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { loadConfig } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
+import { syncAllIndexes } from './models/index.js';
 import { logger } from './utils/logger.js';
 import { initializeSocketServer } from './websocket/index.js';
 
@@ -11,6 +12,10 @@ async function start(): Promise<void> {
 
   // Fail fast: a backend that cannot reach its database must not accept traffic.
   await connectDatabase(config.mongodbUri);
+
+  // The unique and partial indexes carry real invariants (one active spin per room,
+  // one active membership per user), so they are built before the server accepts traffic.
+  await syncAllIndexes();
 
   const app = createApp();
   const httpServer = createServer(app);

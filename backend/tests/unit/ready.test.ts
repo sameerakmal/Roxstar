@@ -1,10 +1,10 @@
 import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createApp } from '../src/app.js';
-import { isDatabaseReady } from '../src/config/database.js';
+import { createApp } from '../../src/app.js';
+import { isDatabaseReady } from '../../src/config/database.js';
 
-vi.mock('../src/config/database.js', () => ({
+vi.mock('../../src/config/database.js', () => ({
   isDatabaseReady: vi.fn(),
   connectDatabase: vi.fn(),
   disconnectDatabase: vi.fn(),

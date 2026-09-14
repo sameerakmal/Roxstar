@@ -175,11 +175,11 @@ is free among PostgreSQL, MySQL or MongoDB — the assessment requires justifyin
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| DB-1 | Entities: User, Room, RoomMember, Draft, Spin, SpinParticipant, SpinEvent/Result | Define each entity per its stated purpose: User (identity/profile metadata); Room (owner, status, timestamps); RoomMember (membership and connection state); Draft (recording metadata and hosted file location); Spin (room, status, start/completion time, winner); SpinParticipant (eligibility, elimination order/time, final status); SpinEvent/Result (auditable event or final outcome) | Schema/migration files committed; database diagram (F deliverable, submission checklist item) | 5 (Schema and keys) |
-| DB-2 | Schema and keys | Choose and document primary keys and natural/unique keys (e.g. one active spin per room, one membership per user per room) | Migration files; written key justification in docs | (see DB-1) |
-| DB-3 | Relationships, constraints and indexes | Foreign keys across Room→RoomMember, Room→Spin, Spin→SpinParticipant, Spin→SpinEvent, User→Draft; constraints enforcing the invariants (single active spin, unique membership, unique elimination order within a spin); indexes for the hot read paths (room state fetch, spin event replay, draft listing) | Written justification of each index against the query it serves; migration files | 5 (Relationships, constraints and indexes) |
-| DB-4 | Queries and persistence correctness | Implement persistence for room state, spin lifecycle transitions, eliminations and the event sequence; ensure the spin result and event sequence are durably recorded (C1: persist the result) | Integration tests reading back a completed spin and its full event sequence; test that a mid-spin crash leaves recoverable state (ties to SP-17) | 5 (Queries and persistence correctness) |
-| DB-5 | Migrations | Provide runnable schema migrations (submission package requires database schema/migrations) | Clean-database migration run documented in the README | part of DB-1/DB-4 and the submission checklist |
+| [x] DB-1 | Entities: User, Room, RoomMember, Draft, Spin, SpinParticipant, SpinEvent/Result | Define each entity per its stated purpose: User (identity/profile metadata); Room (owner, status, timestamps); RoomMember (membership and connection state); Draft (recording metadata and hosted file location); Spin (room, status, start/completion time, winner); SpinParticipant (eligibility, elimination order/time, final status); SpinEvent/Result (auditable event or final outcome) | Schema/migration files committed; database diagram (F deliverable, submission checklist item) | 5 (Schema and keys) |
+| [x] DB-2 | Schema and keys | Choose and document primary keys and natural/unique keys (e.g. one active spin per room, one membership per user per room) | Migration files; written key justification in docs | (see DB-1) |
+| [x] DB-3 | Relationships, constraints and indexes | Foreign keys across Room→RoomMember, Room→Spin, Spin→SpinParticipant, Spin→SpinEvent, User→Draft; constraints enforcing the invariants (single active spin, unique membership, unique elimination order within a spin); indexes for the hot read paths (room state fetch, spin event replay, draft listing) | Written justification of each index against the query it serves; migration files | 5 (Relationships, constraints and indexes) |
+| [~] DB-4 | Queries and persistence correctness | Implement persistence for room state, spin lifecycle transitions, eliminations and the event sequence; ensure the spin result and event sequence are durably recorded (C1: persist the result) | Integration tests reading back a completed spin and its full event sequence; test that a mid-spin crash leaves recoverable state (ties to SP-17) | 5 (Queries and persistence correctness) |
+| [~] DB-5 | Migrations | Provide runnable schema migrations (submission package requires database schema/migrations) | Clean-database migration run documented in the README | part of DB-1/DB-4 and the submission checklist |
 
 ---
 
@@ -341,6 +341,34 @@ Socket.IO and Mongoose. No business logic, no database models, no Android work.
 
 **Still outstanding for later phases:** CI/CD pipeline, cloud deployment, and the private Git remote.
 
-### Phase 2 — Database design and Mongoose models (not started)
+### Phase 2 — Database design and Mongoose models (complete)
 
-DB-1..DB-5 and the repository layer, per ARCHITECTURE.md §3.
+Eight Mongoose models with their indexes, validators and a repository layer. No REST APIs, no
+WebSocket room logic, no spin engine.
+
+| Item | Status | What exists / what is still missing |
+|---|---|---|
+| DB-1 | `[x]` | All seven assessment entities plus `RoomDraftShare`, each a Mongoose schema with typed enums and validators |
+| DB-2 | `[x]` | Mongoose `_id` keys; uniqueness rules expressed as named indexes rather than left to application code |
+| DB-3 | `[x]` | ObjectId references, 13 indexes including 3 unique partial indexes; all verified present in MongoDB |
+| DB-4 | `[~]` | Repository layer owns all queries; CRUD, lifecycle transitions and event replay covered by integration tests. Room/spin *services* arrive in later phases |
+| DB-5 | `[~]` | Schemas are the source of truth and indexes are synced explicitly at startup via `syncAllIndexes()`. A standalone migration/seed script for `/database` is still outstanding |
+| TS-1 | `[~]` | Suites split: 16 unit tests (no database) and 64 integration tests against real MongoDB. Room, spin-engine and API tests still to come |
+
+**Key design point — one active spin per room.** Enforced by a unique partial index on
+`Spin{ roomId }` filtered to `status ∈ {WAITING, RUNNING}`, **not** by a read-then-write check. The
+insert is issued unconditionally and the database decides the winner atomically, so two simultaneous
+start requests cannot both succeed. Proved by a `Promise.allSettled` test firing 2 and then 8
+concurrent creations, asserting exactly one succeeds and one document exists.
+
+**Defect found and corrected in ARCHITECTURE.md §3.3.** The elimination-order partial index was
+specified with `$exists: true`. Verified against MongoDB 7 that `$exists` also matches explicit
+`null`, which would have indexed every not-yet-eliminated participant under a null key and allowed
+only one per spin. Corrected to `$type: 'number'`, with a regression test.
+
+**Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (16/16), `npm run test:integration`
+(64/64), `npm run build` (33 modules), plus direct inspection of the created indexes in MongoDB.
+
+### Phase 3 — Room REST APIs and WebSocket room logic (not started)
+
+RM-1..RM-4, BA-1..BA-5, WS-1..WS-3 and WS-7..WS-11.

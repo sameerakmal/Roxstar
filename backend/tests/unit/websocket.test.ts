@@ -5,7 +5,7 @@ import { io as createClient, type Socket as ClientSocket } from 'socket.io-clien
 import type { Server as SocketIOServer } from 'socket.io';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { initializeSocketServer } from '../src/websocket/index.js';
+import { initializeSocketServer } from '../../src/websocket/index.js';
 
 let httpServer: HttpServer;
 let ioServer: SocketIOServer;

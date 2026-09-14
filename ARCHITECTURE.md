@@ -1,7 +1,8 @@
 # ARCHITECTURE.md — Roxstar Voice Draft, Room & Spin Wheel System
 
-Proposed architecture for the Roxstar Candidate Technical Assessment. This document is a design
-proposal only — no application code exists yet.
+Architecture for the Roxstar Candidate Technical Assessment. Sections describing the backend
+foundation and the data model are implemented (Phases 1-2); the room APIs, WebSocket room logic and
+spin engine described in §4-§7 are still design ahead of implementation.
 
 Scope boundaries are taken from the assessment: live audio streaming, WebRTC, LiveKit, AI, Kubernetes
 and multi-tenant architecture are **out of scope**. The spin wheel uses virtual points only; no
@@ -107,11 +108,13 @@ Follows the assessment's recommended structure, with the contents each directory
 /backend                  Node.js + TypeScript service
     /src
         /config           environment configuration, database connection
+        /models           Mongoose schemas, enums, indexes, validators
         /routes           HTTP route definitions
         /controllers      request handling, response shaping
         /services         RoomService, DraftService, SpinEngine,
                           EventPublisher
-        /repositories     Mongoose model access
+        /repositories     all database queries; the only layer that
+                          touches models
         /websocket        gateway, connection registry, event emitters
         /middleware       request logging, validation, 404, error handler
         /errors           AppError and error envelope types
@@ -156,6 +159,7 @@ rather than joins.
 | `Spin` | Room, status, start/completion time and winner | `roomId` → Room, `status`, `startedAt`, `completedAt`, `winnerUserId` → User (nullable) |
 | `SpinParticipant` | Eligibility, elimination order/time and final status | `spinId` → Spin, `userId` → User, `status`, `eliminationOrder` (nullable), `eliminatedAt` (nullable) |
 | `SpinEvent` | Auditable event or final outcome record | `spinId` → Spin, `sequenceNumber`, `eventType`, `payload`, `createdAt` |
+| `RoomDraftShare` | Records that a Draft was shared into a Room, and by whom | `roomId` → Room, `draftId` → Draft, `sharedByUserId` → User, `sharedAt` |
 
 **Why separate collections rather than embedding.** MongoDB would allow embedding members and spin
 participants inside the room document, but spin participants are written concurrently on every
@@ -163,10 +167,14 @@ elimination tick and the event log grows without bound — both are poor fits fo
 parent document, and a 16MB document ceiling is a real constraint on an unbounded event log. Separate
 collections also let the uniqueness constraints in §3.3 be enforced by indexes.
 
-A `RoomDraftShare` association (room_id, draft_id, shared_by_user_id, shared_at) is proposed to record
-that a Draft was shared into a room, since `draft_shared` is a room-scoped event while a Draft is
-owned by a user. This is an implementation detail of the assessment's "Share a selected Draft with the
-room" requirement, not an added requirement.
+`RoomDraftShare` exists because `draft_shared` is a room-scoped event while a Draft is owned by a
+user. This is an implementation detail of the assessment's "Share a selected Draft with the room"
+requirement, not an added requirement.
+
+`SpinEvent.eventType` covers the three mandatory broadcast events (`spin_started`, `user_eliminated`,
+`winner_announced`) plus `spin_aborted`, which is **persisted only and never broadcast**. Without it an
+aborted spin's log would simply stop with no terminal record, weakening both the audit trail and
+restart recovery.
 
 ### 3.2 Relationships
 
@@ -196,7 +204,7 @@ logic. MongoDB supports unique and **partial** indexes, which covers the two con
 | Only one active spin per room (C1) | Unique **partial** index on `Spin{ roomId }` with `partialFilterExpression: { status: { $in: ['WAITING', 'RUNNING'] } }` |
 | A user holds at most one active membership per room | Unique **partial** index on `RoomMember{ roomId, userId }` filtered to `membershipState: 'JOINED'` |
 | A user appears at most once per spin | Unique index on `SpinParticipant{ spinId, userId }` |
-| Elimination order is unique within a spin | Unique partial index on `SpinParticipant{ spinId, eliminationOrder }` where the field exists |
+| Elimination order is unique within a spin | Unique partial index on `SpinParticipant{ spinId, eliminationOrder }` with `partialFilterExpression: { eliminationOrder: { $type: 'number' } }` |
 | Spin event order is unique within a spin | Unique index on `SpinEvent{ spinId, sequenceNumber }` |
 | Winner is set only on a COMPLETED spin | Mongoose schema validator (MongoDB has no check constraints; a JSON Schema validator on the collection is the alternative) |
 | Eligible count within bounds (C1: min 3, max 20) | Validated at spin start in the service layer — a cross-document count is not expressible as an index |
@@ -204,6 +212,11 @@ logic. MongoDB supports unique and **partial** indexes, which covers the two con
 The single-active-spin partial index is the load-bearing one: it makes "only one active spin may exist
 in a room" a database guarantee, so the duplicate-start edge case (C4) cannot be lost to a race between
 two concurrent requests.
+
+The elimination-order filter must be `$type: 'number'` rather than `$exists: true`. Verified against
+MongoDB 7: `$exists` also matches an explicit `null`, so an `$exists` filter would index every
+not-yet-eliminated participant under a null key and permit only **one** of them per spin — breaking
+every spin at the second participant. `$type: 'number'` indexes only real elimination orders.
 
 ### 3.4 Indexes and the queries they serve
 
@@ -214,6 +227,9 @@ two concurrent requests.
 | `SpinParticipant{ spinId: 1, status: 1 }` | Selecting the next active participant each elimination tick |
 | `SpinEvent{ spinId: 1, sequenceNumber: 1 }` | Ordered event replay for Get Spin Result and reconnect recovery |
 | `Draft{ ownerUserId: 1, createdAt: -1 }` | Draft listing for a user, newest first |
+| `RoomMember{ roomId: 1, membershipState: 1 }` | Active-participant filter for the room snapshot |
+| `SpinParticipant{ spinId: 1, userId: 1 }` | Participant lookup during elimination and winner selection |
+| `RoomDraftShare{ roomId: 1, sharedAt: -1 }` | Shared-draft list for a room snapshot, newest first |
 
 ---
 

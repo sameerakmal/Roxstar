@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { createApp } from '../src/app.js';
+import { createApp } from '../../src/app.js';
 
 describe('GET /health', () => {
   // No database is connected anywhere in this suite. Passing proves liveness
