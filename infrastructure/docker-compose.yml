@@ -1,0 +1,29 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: roxstar-mongo
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+
+  backend:
+    build:
+      context: ../backend
+    container_name: roxstar-backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      # Host port is overridable (BACKEND_PORT=3200 docker compose up) so the stack
+      # can run alongside a backend already bound to 3000 on the host.
+      - '${BACKEND_PORT:-3000}:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      MONGODB_URI: mongodb://mongo:27017/roxstar
+      LOG_LEVEL: info
+
+volumes:
+  mongo-data:

@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test output
+coverage/
+
+# Android
+.gradle/
+local.properties
+captures/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Native build
+.cxx/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
