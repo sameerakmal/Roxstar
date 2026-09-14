@@ -3,17 +3,13 @@ import type { Types } from 'mongoose';
 import {
   draftRepository,
   roomMemberRepository,
+  roomRepository,
   spinRepository,
   userRepository,
 } from '../repositories/index.js';
 import type { RoomRecord } from '../repositories/roomRepository.js';
-import type {
-  ActiveSpinDto,
-  ParticipantDto,
-  RoomDto,
-  RoomStateDto,
-  SharedDraftDto,
-} from './dto.js';
+import type { ActiveSpinDto, ParticipantDto, RoomDto, RoomStateDto, SharedDraftDto } from './dto.js';
+import { buildActiveSpinDto } from './spinProjection.js';
 
 export function toRoomDto(room: RoomRecord): RoomDto {
   return {
@@ -80,11 +76,7 @@ async function assembleActiveSpin(roomId: Types.ObjectId): Promise<ActiveSpinDto
     return null;
   }
 
-  return {
-    spinId: spin._id.toString(),
-    status: spin.status,
-    startedAt: spin.startedAt ?? null,
-  };
+  return buildActiveSpinDto(spin);
 }
 
 // Builds the authoritative room snapshot. Kept separate from roomService so the
@@ -98,4 +90,22 @@ export async function assembleRoomState(room: RoomRecord): Promise<RoomStateDto>
   ]);
 
   return { room: toRoomDto(room), participants, sharedDrafts, activeSpin };
+}
+
+// Convenience for callers that hold only an id — socket handlers and the spin engine,
+// which broadcast state without having loaded the room document themselves.
+export async function assembleRoomStateById(
+  roomId: Types.ObjectId,
+): Promise<RoomStateDto | null> {
+  const room = await roomRepository.findRoomById(roomId);
+  if (room === null) {
+    return null;
+  }
+  return assembleRoomState(room);
+}
+
+export async function assembleParticipantDtos(
+  roomId: Types.ObjectId,
+): Promise<ParticipantDto[]> {
+  return assembleParticipants(roomId);
 }

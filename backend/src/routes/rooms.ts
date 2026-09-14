@@ -8,6 +8,7 @@ import {
   postRoom,
   roomParamsSchema,
 } from '../controllers/roomController.js';
+import { postSpin } from '../controllers/spinController.js';
 import { currentUser } from '../middleware/currentUser.js';
 import { validateBody, validateParams } from '../middleware/validateRequest.js';
 
@@ -22,6 +23,7 @@ roomRouter.post('/', postRoom);
 roomRouter.get('/:roomId', validateParams(roomParamsSchema), getRoom);
 roomRouter.post('/:roomId/join', validateParams(roomParamsSchema), postJoin);
 roomRouter.post('/:roomId/leave', validateParams(roomParamsSchema), postLeave);
+roomRouter.post('/:roomId/spins', validateParams(roomParamsSchema), postSpin);
 roomRouter.post(
   '/:roomId/drafts',
   validateParams(roomParamsSchema),

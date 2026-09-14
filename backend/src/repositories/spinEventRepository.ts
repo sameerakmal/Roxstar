@@ -59,3 +59,35 @@ export async function findLastSequenceNumber(spinId: Types.ObjectId): Promise<nu
     .exec();
   return latest?.sequenceNumber ?? 0;
 }
+
+// Appends the next event without a caller-supplied sequence number. The sequence is
+// derived from the log itself and the unique (spinId, sequenceNumber) index settles
+// races: a collision is retried against fresh state rather than overwriting.
+//
+// Sequence numbers are unique and monotonically increasing, but NOT guaranteed
+// gapless: without transactions a crash can leave a hole. room_state is authoritative
+// and clients repair from the snapshot rather than assuming contiguity.
+export async function appendNextEvent(
+  spinId: Types.ObjectId,
+  eventType: SpinEventType,
+  payload: Record<string, unknown>,
+): Promise<SpinEventRecord> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const next = (await findLastSequenceNumber(spinId)) + 1;
+    try {
+      const created = await SpinEventModel.create({
+        spinId,
+        sequenceNumber: next,
+        eventType,
+        payload,
+      });
+      return created.toObject();
+    } catch (error: unknown) {
+      if (!isDuplicateKeyError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error(`Could not append event for spin ${spinId.toString()}`);
+}

@@ -1,6 +1,6 @@
 import { model, Schema, type HydratedDocument, type InferSchemaType } from 'mongoose';
 
-import { SPIN_PARTICIPANT_STATUS } from './enums.js';
+import { ELIMINATION_REASON, SPIN_PARTICIPANT_STATUS } from './enums.js';
 
 const spinParticipantSchema = new Schema(
   {
@@ -33,6 +33,13 @@ const spinParticipantSchema = new Schema(
       type: Date,
       default: null,
     },
+    // TIMER = removed by a scheduled 5-second tick. LEFT = removed because the user
+    // left the room mid-spin. Recovery counts only TIMER against the schedule.
+    eliminationReason: {
+      type: String,
+      enum: ELIMINATION_REASON,
+      default: null,
+    },
   },
   { timestamps: true },
 );
@@ -45,6 +52,12 @@ spinParticipantSchema.pre('validate', function (next) {
   }
   if (isEliminated && this.eliminatedAt === null) {
     this.invalidate('eliminatedAt', 'An ELIMINATED participant must record a timestamp');
+  }
+  if (isEliminated && this.eliminationReason === null) {
+    this.invalidate('eliminationReason', 'An ELIMINATED participant must record a reason');
+  }
+  if (!isEliminated && this.eliminationReason !== null) {
+    this.invalidate('eliminationReason', 'Only an ELIMINATED participant may record a reason');
   }
   if (!isEliminated && this.eliminationOrder !== null) {
     this.invalidate('eliminationOrder', 'Only an ELIMINATED participant may record an order');

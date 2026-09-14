@@ -8,8 +8,8 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 
 ## Status
 
-This repository is being built in phases. **Phases 1-3 are complete** (backend foundation; database
-models and repositories; room REST API and services).
+This repository is being built in phases. **Phases 1-4 are complete** (backend foundation; database
+models and repositories; room REST API; real-time events and the spin engine).
 
 | Area | Status |
 |---|---|
@@ -20,12 +20,14 @@ models and repositories; room REST API and services).
 | `/health` and `/ready` endpoints | Done |
 | Database models, indexes and repositories | Done — 8 models, 13 indexes, repository layer |
 | Room REST API (create/join/leave/state/share draft) | Done — services, DTOs, domain errors |
-| Test harness (Vitest + Supertest) | Done — 34 unit, 99 integration |
+| Socket.IO real-time events + presence | Done — all seven mandatory events |
+| Spin engine (server-authoritative, 5s eliminations, recovery) | Done |
+| Test harness (Vitest + Supertest + socket.io-client) | Done — 60 unit, 154 integration |
 | Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| WebSocket room events, spin engine, Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
+| Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
 
-Rooms, membership and draft sharing work over REST. No WebSocket room events, spin engine or Android
-code is implemented yet — room mutations are persisted but not yet broadcast.
+The backend is feature-complete for the assessment's server-side scope: rooms, drafts, real-time
+events and the multiplayer spin. No Android, audio, CI/CD or cloud deployment work exists yet.
 
 ## Technology stack
 
@@ -85,6 +87,7 @@ cp .env.example .env
 | `PORT` | no | `3000` | HTTP port |
 | `MONGODB_URI` | **yes** | — | MongoDB connection string |
 | `LOG_LEVEL` | no | `info` | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
+| `SPIN_ELIMINATION_INTERVAL_MS` | no | `5000` | Milliseconds between eliminations; lowered in tests |
 
 Configuration is validated at startup with Zod. A missing or malformed variable aborts the process
 with a message naming every offending variable. `.env` is git-ignored and no real credentials are
@@ -191,10 +194,71 @@ curl -X POST http://localhost:3000/rooms -H "X-User-Id: <that id>"
 | `POST` | `/rooms/:roomId/join` | Join a room | **201** joined / **200** already a member |
 | `POST` | `/rooms/:roomId/leave` | Leave a room | 200 |
 | `POST` | `/rooms/:roomId/drafts` | Share one of your drafts into the room | **201** shared / **200** already shared |
+| `POST` | `/rooms/:roomId/spins` | Start a spin — **room owner only**, 3–20 eligible members | 201 |
+| `GET` | `/spins/:spinId` | Live spin state, or the final result plus its event sequence | 200 |
 
 Join and Share are **idempotent**: a retry or duplicate tap returns 200 with the current state rather
 than an error, and the unique partial indexes guarantee no duplicate row even under concurrent
 requests.
+
+### Real-time events (Socket.IO)
+
+Connect with the same demo identity used by REST, then join a room you are already a member of:
+
+```js
+const socket = io('http://localhost:3000', { auth: { userId: '<your user id>' } });
+socket.emit('join_room', { roomId }, (ack) => console.log(ack)); // { ok: true }
+socket.on('room_state', (state) => { /* authoritative snapshot */ });
+```
+
+A socket never creates membership — join the room over REST first, or `join_room` returns
+`NOT_A_MEMBER`.
+
+| Event | When |
+|---|---|
+| `room_state` | On joining a room channel, and after any reconnect — the authoritative snapshot |
+| `user_joined` | A member's **first** socket attaches, or a new member joins |
+| `user_left` | `reason: 'LEFT'` (membership ended) or `'DISCONNECTED'` (last socket closed) |
+| `draft_shared` | A draft is shared into the room |
+| `spin_started` | A spin begins, with the eligible players |
+| `user_eliminated` | Each elimination, with the updated remaining players |
+| `winner_announced` | Exactly once, when one participant remains |
+
+**Multiple connections per user are supported.** Presence is reference-counted per socket, so opening
+a second tab emits no extra `user_joined`, and closing one emits no `user_left` while another remains.
+
+**Synchronization rule.** Spin events carry a `sequenceNumber`. Apply an event when it follows the one
+you hold; on a gap, adopt a fresh `room_state`; discard stale events. `room_state` always wins — the
+event stream is not guaranteed gapless (see below).
+
+### The spin
+
+Server-authoritative throughout: the client never decides who is eliminated, and no client timer is
+trusted. Only the room owner may start a spin, which requires **3-20** eligible members — every member
+whose `membershipState` is `JOINED`, whether or not they are currently connected.
+
+Once running, one participant is eliminated every **5 seconds** (`SPIN_ELIMINATION_INTERVAL_MS`) until
+one remains and is recorded as the winner. Every event is persisted before it is broadcast.
+
+| Situation | Behaviour |
+|---|---|
+| Two simultaneous start requests | A unique partial index allows exactly one; the other gets `409 ACTIVE_SPIN_EXISTS` |
+| A member **leaves** mid-spin | Eliminated immediately (`eliminationReason: 'LEFT'`) |
+| A member **disconnects** mid-spin | No effect on the spin — they can reconnect and resume |
+| Members drop below 3 | The spin continues; 3-20 applies only at start |
+| One participant remains | Spin completes with that winner |
+| No participant remains | Spin aborts with no winner |
+| The owner leaves or disconnects | The spin continues; ownership does not transfer |
+| The server restarts mid-spin | The spin resumes, catching up the eliminations that fell due |
+
+`eliminationReason` (`TIMER` or `LEFT`) exists because recovery counts only `TIMER` eliminations when
+working out how many scheduled ticks are still owed. Counting a `LEFT` elimination would make recovery
+skip a scheduled tick and end the spin early.
+
+**No MongoDB transactions are used**, which keeps the standalone Docker setup. The trade-off is
+documented rather than hidden: a crash between a state change and its event can leave a gap in the
+event log, so sequence numbers are unique and monotonically increasing but **not gapless**, and
+`room_state` is the repair mechanism.
 
 ### Error codes
 
@@ -206,11 +270,16 @@ requests.
 | `DRAFT_NOT_OWNED` | 403 | Caller does not own the draft they tried to share |
 | `ROOM_NOT_FOUND` / `DRAFT_NOT_FOUND` | 404 | No such room or draft |
 | `ROOM_CLOSED` | 409 | Room no longer accepts the operation |
+| `NOT_ROOM_OWNER` | 403 | Only the owner may start a spin |
+| `SPIN_NOT_FOUND` | 404 | No such spin |
+| `ACTIVE_SPIN_EXISTS` | 409 | The room already has an active spin |
+| `INSUFFICIENT_PLAYERS` / `TOO_MANY_PLAYERS` | 409 | Eligible members outside the 3-20 range |
 
 ### Room state
 
-`GET /rooms/:roomId` returns the authoritative snapshot. `activeSpin` is always `null` until the spin
-engine lands in Phase 4; the field is present so its shape is stable.
+`GET /rooms/:roomId` returns the authoritative snapshot. `activeSpin` is `null` when no spin is
+running, and otherwise carries the spin's participants, remaining players, winner and
+`lastSequenceNumber` — everything a client needs to resynchronize mid-spin.
 
 ```json
 {
@@ -229,11 +298,14 @@ engine lands in Phase 4; the field is present so its shape is stable.
 
 Responses expose no Mongoose internals — no `_id`, no `__v` — and identifiers are strings.
 
-### Known Phase 3 limitation
+### Known limitations
 
-The room **owner may leave** and the room stays `ACTIVE`; ownership does not transfer. The assessment
-specifies no owner-departure rule, and the only owner-restricted operation (Start Spin) arrives in
-Phase 4, where the related admin-disconnect case is decided.
+- The room **owner may leave** and the room stays `ACTIVE`; ownership does not transfer. If the owner
+  is an active spin participant they are eliminated like anyone else, and the spin continues.
+- **Presence is single-instance.** Socket reference counting lives in process memory, which is correct
+  for one server. A multi-instance deployment would need the Socket.IO Redis adapter — out of scope
+  for this assessment.
+- The identity mechanism is a demo stand-in, not authentication (see above).
 
 ## Error format
 
@@ -262,8 +334,8 @@ npm test
 The suites are split so the fast one has no external dependencies:
 
 ```bash
-npm test               # 34 unit tests, no database needed
-npm run test:integration   # 99 integration tests, needs MongoDB
+npm test               # 60 unit tests, no database needed
+npm run test:integration   # 154 integration tests, needs MongoDB
 npm run test:all           # both
 ```
 

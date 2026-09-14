@@ -18,6 +18,7 @@ describe('loadConfig', () => {
       port: 8080,
       mongodbUri: 'mongodb://localhost:27017/roxstar',
       logLevel: 'debug',
+      spinEliminationIntervalMs: 5000,
       isProduction: true,
     });
   });
@@ -28,6 +29,8 @@ describe('loadConfig', () => {
     expect(config.nodeEnv).toBe('development');
     expect(config.port).toBe(3000);
     expect(config.logLevel).toBe('info');
+    // Production cadence required by the assessment; tests inject a smaller value.
+    expect(config.spinEliminationIntervalMs).toBe(5000);
     expect(config.isProduction).toBe(false);
   });
 

@@ -28,6 +28,18 @@ const spinSchema = new Schema(
       ref: 'User',
       default: null,
     },
+    // Who started the spin. Only the room owner may, so this is the audit record of
+    // that check.
+    startedByUserId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    // Why a spin ended without a winner. Null for every non-ABORTED spin.
+    abortReason: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true },
 );

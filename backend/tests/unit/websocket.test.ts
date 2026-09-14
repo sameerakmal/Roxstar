@@ -17,23 +17,58 @@ afterEach(async () => {
   httpServer?.close();
 });
 
+async function listen(): Promise<number> {
+  httpServer = createServer();
+  ioServer = initializeSocketServer(httpServer);
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, resolve);
+  });
+  return (httpServer.address() as AddressInfo).port;
+}
+
 describe('Socket.IO server', () => {
-  it('initializes and accepts a client connection', async () => {
-    httpServer = createServer();
-    ioServer = initializeSocketServer(httpServer);
+  it('initializes and listens', async () => {
+    const port = await listen();
 
-    await new Promise<void>((resolve) => {
-      httpServer.listen(0, resolve);
+    expect(port).toBeGreaterThan(0);
+    expect(ioServer).toBeDefined();
+  });
+
+  // Identity is enforced during the handshake, so an anonymous socket never reaches a
+  // handler. Accepting an identified connection needs a real user and is covered by
+  // the socket integration suite.
+  it('rejects a connection with no identity', async () => {
+    const port = await listen();
+    client = createClient(`http://localhost:${String(port)}`, { transports: ['websocket'] });
+
+    const message = await new Promise<string>((resolve, reject) => {
+      client.on('connect_error', (error: Error) => {
+        resolve(error.message);
+      });
+      client.on('connect', () => {
+        reject(new Error('expected the connection to be rejected'));
+      });
     });
 
-    const { port } = httpServer.address() as AddressInfo;
-    client = createClient(`http://localhost:${String(port)}`);
+    expect(message).toBe('MISSING_USER_ID');
+  });
 
-    await new Promise<void>((resolve, reject) => {
-      client.on('connect', resolve);
-      client.on('connect_error', reject);
+  it('rejects a malformed user id', async () => {
+    const port = await listen();
+    client = createClient(`http://localhost:${String(port)}`, {
+      transports: ['websocket'],
+      auth: { userId: 'not-an-id' },
     });
 
-    expect(client.connected).toBe(true);
+    const message = await new Promise<string>((resolve, reject) => {
+      client.on('connect_error', (error: Error) => {
+        resolve(error.message);
+      });
+      client.on('connect', () => {
+        reject(new Error('expected the connection to be rejected'));
+      });
+    });
+
+    expect(message).toBe('INVALID_USER_ID');
   });
 });

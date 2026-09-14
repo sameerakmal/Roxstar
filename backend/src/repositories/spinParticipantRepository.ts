@@ -7,6 +7,7 @@ import {
 } from '../errors/RepositoryError.js';
 import {
   SpinParticipantModel,
+  type EliminationReason,
   type SpinParticipant,
   type SpinParticipantStatus,
 } from '../models/index.js';
@@ -59,6 +60,25 @@ export async function countParticipantsByStatus(
   return SpinParticipantModel.countDocuments({ spinId, status }).exec();
 }
 
+// How many scheduled ticks have already been applied. Eliminations caused by a user
+// LEAVING are excluded on purpose: they did not consume a 5-second tick, and counting
+// them would make recovery skip a scheduled elimination.
+export async function countTimerEliminations(spinId: Types.ObjectId): Promise<number> {
+  return SpinParticipantModel.countDocuments({
+    spinId,
+    status: 'ELIMINATED',
+    eliminationReason: 'TIMER',
+  }).exec();
+}
+
+export async function findActiveUserIds(spinId: Types.ObjectId): Promise<Types.ObjectId[]> {
+  const participants = await SpinParticipantModel.find({ spinId, status: 'ACTIVE' })
+    .select('userId')
+    .lean<{ userId: Types.ObjectId }[]>()
+    .exec();
+  return participants.map((participant) => participant.userId);
+}
+
 export async function activateParticipants(spinId: Types.ObjectId): Promise<number> {
   const result = await SpinParticipantModel.updateMany(
     { spinId, status: 'ELIGIBLE' },
@@ -67,20 +87,127 @@ export async function activateParticipants(spinId: Types.ObjectId): Promise<numb
   return result.modifiedCount;
 }
 
-// Atomically claims one ACTIVE participant and marks them eliminated in a single
-// document operation. Two concurrent elimination ticks cannot claim the same person:
-// the second matches a document that is no longer ACTIVE. The unique partial index on
-// eliminationOrder independently rejects a duplicated order.
+// The elimination primitive. Status, order, timestamp and reason are written by ONE
+// conditional update on ONE document, so the forbidden intermediate states are
+// unreachable without needing a transaction:
+//
+//   - ELIMINATED with no order      -> impossible, the same $set carries both
+//   - an order consumed with no elimination -> impossible, there is no separate
+//     allocation step to crash between
+//   - the same participant eliminated twice -> impossible, the filter requires ACTIVE
+//   - two participants sharing an order     -> rejected by uniq_elimination_order,
+//     which leaves the document untouched so the retry simply recomputes
+//
+// The order is derived rather than read from a counter field. A losing race surfaces
+// as a null match or a duplicate key, and is retried with fresh state.
+async function applyElimination(
+  spinId: Types.ObjectId,
+  userId: Types.ObjectId,
+  reason: EliminationReason,
+): Promise<SpinParticipantRecord | null> {
+  const eliminationOrder = (await countParticipantsByStatus(spinId, 'ELIMINATED')) + 1;
+
+  try {
+    return await SpinParticipantModel.findOneAndUpdate(
+      { spinId, userId, status: 'ACTIVE' },
+      {
+        $set: {
+          status: 'ELIMINATED',
+          eliminationOrder,
+          eliminatedAt: new Date(),
+          eliminationReason: reason,
+        },
+      },
+      { new: true },
+    )
+      .lean<SpinParticipantRecord>()
+      .exec();
+  } catch (error: unknown) {
+    if (isDuplicateKeyError(error)) {
+      // Another writer took this order. The document was not modified.
+      return null;
+    }
+    throw error;
+  }
+}
+
+export type EliminationOutcome =
+  | { kind: 'ELIMINATED'; participant: SpinParticipantRecord }
+  | { kind: 'LAST_REMAINING'; userId: Types.ObjectId }
+  | { kind: 'NONE_REMAINING' };
+
+// Picks one active participant at random and eliminates them. The server chooses:
+// no client input reaches this decision.
+export async function eliminateNextParticipant(
+  spinId: Types.ObjectId,
+): Promise<EliminationOutcome> {
+  // Bounded by the participant count; each attempt re-reads live state.
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const activeUserIds = await findActiveUserIds(spinId);
+
+    if (activeUserIds.length === 0) {
+      return { kind: 'NONE_REMAINING' };
+    }
+    if (activeUserIds.length === 1) {
+      return { kind: 'LAST_REMAINING', userId: activeUserIds[0] as Types.ObjectId };
+    }
+
+    const index = Math.floor(Math.random() * activeUserIds.length);
+    const participant = await applyElimination(
+      spinId,
+      activeUserIds[index] as Types.ObjectId,
+      'TIMER',
+    );
+
+    if (participant !== null) {
+      return { kind: 'ELIMINATED', participant };
+    }
+  }
+
+  throw new Error(`Could not eliminate a participant in spin ${spinId.toString()}`);
+}
+
+// A user who leaves mid-spin is eliminated immediately, with reason LEFT so recovery
+// does not mistake it for a scheduled tick. Returns null when they were not active.
+export async function eliminateParticipantForLeave(
+  spinId: Types.ObjectId,
+  userId: Types.ObjectId,
+): Promise<SpinParticipantRecord | null> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const participant = await applyElimination(spinId, userId, 'LEFT');
+    if (participant !== null) {
+      return participant;
+    }
+
+    // Null means either they were not active, or an order collision. Distinguish the
+    // two so a genuine non-participant is not retried forever.
+    const stillActive = await SpinParticipantModel.exists({ spinId, userId, status: 'ACTIVE' });
+    if (stillActive === null) {
+      return null;
+    }
+  }
+
+  throw new Error(`Could not eliminate leaving user ${userId.toString()}`);
+}
+
+// Retained from Phase 2: exercised by existing tests and useful for direct control.
+// The engine uses eliminateNextParticipant / eliminateParticipantForLeave instead.
 export async function eliminateParticipant(
   spinId: Types.ObjectId,
   userId: Types.ObjectId,
   eliminationOrder: number,
+  reason: EliminationReason = 'TIMER',
 ): Promise<SpinParticipantRecord | null> {
   try {
     return await SpinParticipantModel.findOneAndUpdate(
       { spinId, userId, status: 'ACTIVE' },
       {
-        $set: { status: 'ELIMINATED', eliminationOrder, eliminatedAt: new Date() },
+        $set: {
+          status: 'ELIMINATED',
+          eliminationOrder,
+          eliminatedAt: new Date(),
+          eliminationReason: reason,
+        },
       },
       { new: true },
     )

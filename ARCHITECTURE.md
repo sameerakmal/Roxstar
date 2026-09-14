@@ -156,8 +156,8 @@ rather than joins.
 | `Room` | Room owner, status and timestamps | `ownerUserId` → User, `status`, `createdAt`, `updatedAt` |
 | `RoomMember` | Membership and connection state | `roomId` → Room, `userId` → User, `membershipState`, `connectionState`, `joinedAt`, `leftAt` |
 | `Draft` | Recording metadata and hosted file location | `ownerUserId` → User, `name`, `durationMs`, `effect`, `fileLocation`, `createdAt` |
-| `Spin` | Room, status, start/completion time and winner | `roomId` → Room, `status`, `startedAt`, `completedAt`, `winnerUserId` → User (nullable) |
-| `SpinParticipant` | Eligibility, elimination order/time and final status | `spinId` → Spin, `userId` → User, `status`, `eliminationOrder` (nullable), `eliminatedAt` (nullable) |
+| `Spin` | Room, status, start/completion time and winner | `roomId` → Room, `status`, `startedAt`, `completedAt`, `winnerUserId` → User (nullable), `startedByUserId` → User (nullable), `abortReason` (nullable) |
+| `SpinParticipant` | Eligibility, elimination order/time and final status | `spinId` → Spin, `userId` → User, `status`, `eliminationOrder` (nullable), `eliminatedAt` (nullable), `eliminationReason` (`TIMER` \| `LEFT`, nullable) |
 | `SpinEvent` | Auditable event or final outcome record | `spinId` → Spin, `sequenceNumber`, `eventType`, `payload`, `createdAt` |
 | `RoomDraftShare` | Records that a Draft was shared into a Room, and by whom | `roomId` → Room, `draftId` → Draft, `sharedByUserId` → User, `sharedAt` |
 
@@ -436,6 +436,65 @@ The assessment specifies: `WAITING -> RUNNING -> COMPLETED`, with a branch `-> A
 | `WINNER` | The single last-remaining participant |
 
 Status transitions are one-way: `ELIGIBLE → ACTIVE → (ELIMINATED | WINNER)`.
+
+### 7.3.1 Why an elimination records its reason
+
+`eliminationReason` distinguishes the two ways a participant can be removed:
+
+| Reason | Cause | Consumes a scheduled tick? |
+|---|---|---|
+| `TIMER` | A scheduled 5-second elimination | **Yes** |
+| `LEFT` | The user explicitly left the room mid-spin | **No** |
+
+This is not bookkeeping — it is load-bearing for restart recovery. Recovery works out how
+many scheduled eliminations are still owed by subtracting those already applied from those due by
+elapsed time. If a `LEFT` elimination were counted in that subtraction, recovery would believe a
+scheduled tick had already run and would silently skip one, ending the spin early. Only `TIMER`
+eliminations are counted against the schedule.
+
+A **disconnect is not a departure**: it changes presence only, leaves membership `JOINED`, and has no
+effect on spin participation. That is what allows a reconnecting client to resume.
+
+### 7.3.2 Restart recovery
+
+Recovery derives outstanding work from persisted state, never from elapsed time alone:
+
+```
+activeCount          = count(participants, ACTIVE)
+timerEliminatedCount = count(participants, ELIMINATED AND reason == 'TIMER')
+
+activeCount == 0 -> ABORT (NO_PARTICIPANTS_REMAINING)
+activeCount == 1 -> COMPLETE with that participant as winner
+otherwise:
+  due     = floor((now - startedAt) / interval)
+  pending = clamp(due - timerEliminatedCount, 0, activeCount - 1)
+```
+
+The clamp means recovery can never run past a single winner however long the process was down, and
+every step re-reads live state so an already-eliminated participant is never eliminated twice.
+Recovery is therefore **safe to run repeatedly**. Orphan `WAITING` spins — created by a start that
+crashed before it finished — are aborted so they cannot occupy the room's single active-spin slot
+forever.
+
+### 7.3.3 Persistence and broadcast ordering
+
+The order is always: apply the authoritative mutation → persist the `SpinEvent` → broadcast. A state
+that was not persisted is never announced. If a broadcast fails the database remains correct and
+clients repair themselves from `room_state`.
+
+Because transactions are deliberately not used, two windows are accepted and documented:
+
+- A crash between the mutation and its event leaves a **gap in the event log**. The mutation is
+  authoritative; recovery continues correctly and clients resynchronize from the snapshot.
+- Completion persists the spin document immediately before appending `winner_announced`, so a reader
+  can briefly observe `COMPLETED` before its terminal event exists.
+
+Sequence numbers and elimination orders are therefore **unique, monotonically increasing and
+atomically assigned — but not gapless**. Nothing depends on contiguity: ordering uses sorting, clients
+compare against the snapshot's `lastSequenceNumber`, and recovery derives work from participant state.
+
+The client synchronization rule: apply an incremental event when it follows the sequence already held;
+on a gap, adopt a fresh `room_state`; discard stale events. `room_state` always wins over the stream.
 
 ### 7.4 Elimination sequence and event order
 

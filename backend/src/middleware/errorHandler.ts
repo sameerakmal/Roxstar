@@ -22,6 +22,11 @@ const DOMAIN_ERROR_STATUS: Record<string, number> = {
   NOT_A_MEMBER: 403,
   DRAFT_NOT_OWNED: 403,
   ROOM_CLOSED: 409,
+  NOT_ROOM_OWNER: 403,
+  SPIN_NOT_FOUND: 404,
+  ACTIVE_SPIN_EXISTS: 409,
+  INSUFFICIENT_PLAYERS: 409,
+  TOO_MANY_PLAYERS: 409,
 };
 
 function toErrorResponse(error: unknown): { statusCode: number; body: ErrorResponse } {

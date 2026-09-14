@@ -6,10 +6,13 @@ import {
   RoomNotFoundError,
 } from '../errors/DomainError.js';
 import { DuplicateKeyError } from '../errors/RepositoryError.js';
-import { roomMemberRepository, roomRepository } from '../repositories/index.js';
+import { roomMemberRepository, roomRepository, userRepository } from '../repositories/index.js';
 import type { RoomRecord } from '../repositories/roomRepository.js';
+import { ROOM_EVENTS, type LeaveReason } from '../websocket/events.js';
 import type { RoomStateDto } from './dto.js';
-import { assembleRoomState } from './roomStateAssembler.js';
+import { publishToRoom } from './eventPublisher.js';
+import { assembleParticipantDtos, assembleRoomState } from './roomStateAssembler.js';
+import { handleParticipantLeft } from './spinService.js';
 
 export type JoinOutcome = {
   created: boolean;
@@ -58,6 +61,62 @@ export async function getRoomState(
   return assembleRoomState(room);
 }
 
+async function userSummary(userId: Types.ObjectId): Promise<{ userId: string; displayName: string }> {
+  const user = await userRepository.findUserById(userId);
+  return { userId: userId.toString(), displayName: user?.displayName ?? 'Unknown user' };
+}
+
+// Persist-then-broadcast: callers invoke this only after their write has been awaited.
+export async function broadcastUserJoined(
+  roomId: Types.ObjectId,
+  userId: Types.ObjectId,
+): Promise<void> {
+  const [user, participants] = await Promise.all([
+    userSummary(userId),
+    assembleParticipantDtos(roomId),
+  ]);
+  publishToRoom(roomId.toString(), ROOM_EVENTS.userJoined, {
+    roomId: roomId.toString(),
+    user,
+    participants,
+  });
+}
+
+export async function broadcastUserLeft(
+  roomId: Types.ObjectId,
+  userId: Types.ObjectId,
+  reason: LeaveReason,
+): Promise<void> {
+  const [user, participants] = await Promise.all([
+    userSummary(userId),
+    assembleParticipantDtos(roomId),
+  ]);
+  publishToRoom(roomId.toString(), ROOM_EVENTS.userLeft, {
+    roomId: roomId.toString(),
+    user,
+    reason,
+    participants,
+  });
+}
+
+// A dropped socket changes presence only. Membership stays JOINED and spin
+// participation is untouched, which is what allows the user to reconnect and resume.
+export async function handleSocketDisconnected(
+  roomId: Types.ObjectId,
+  userId: Types.ObjectId,
+): Promise<void> {
+  await roomMemberRepository.setConnectionState(roomId, userId, 'DISCONNECTED');
+  await broadcastUserLeft(roomId, userId, 'DISCONNECTED');
+}
+
+export async function handleSocketConnected(
+  roomId: Types.ObjectId,
+  userId: Types.ObjectId,
+): Promise<void> {
+  await roomMemberRepository.setConnectionState(roomId, userId, 'CONNECTED');
+  await broadcastUserJoined(roomId, userId);
+}
+
 // Idempotent join. A repeat from the same user is the same outcome the caller asked
 // for, so it succeeds with `created: false` rather than erroring.
 //
@@ -81,7 +140,9 @@ export async function joinRoom(
 
   try {
     await roomMemberRepository.joinRoom(roomId, userId);
-    return { created: true, state: await assembleRoomState(room) };
+    const state = await assembleRoomState(room);
+    await broadcastUserJoined(roomId, userId);
+    return { created: true, state };
   } catch (error: unknown) {
     if (error instanceof DuplicateKeyError) {
       return { created: false, state: await assembleRoomState(room) };
@@ -106,6 +167,10 @@ export async function leaveRoom(
   if (left === null) {
     throw new NotAMemberError(roomId.toString());
   }
+
+  // An explicit leave removes the user from a running spin (unlike a disconnect).
+  await handleParticipantLeft(roomId, userId);
+  await broadcastUserLeft(roomId, userId, 'LEFT');
 
   return assembleRoomState(room);
 }

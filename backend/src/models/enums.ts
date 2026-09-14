@@ -25,6 +25,13 @@ export type ActiveSpinStatus = (typeof ACTIVE_SPIN_STATUSES)[number];
 export const SPIN_PARTICIPANT_STATUS = ['ELIGIBLE', 'ACTIVE', 'ELIMINATED', 'WINNER'] as const;
 export type SpinParticipantStatus = (typeof SPIN_PARTICIPANT_STATUS)[number];
 
+// Why a participant was eliminated. Recovery counts only TIMER eliminations when
+// working out how many scheduled ticks have already happened: a participant removed
+// because they LEFT did not consume a 5-second tick, and counting them would make
+// recovery skip a scheduled elimination and shorten the spin.
+export const ELIMINATION_REASON = ['TIMER', 'LEFT'] as const;
+export type EliminationReason = (typeof ELIMINATION_REASON)[number];
+
 // spin_aborted is persisted for audit and restart recovery only; the assessment's
 // mandatory broadcast events are the other three.
 export const SPIN_EVENT_TYPE = [

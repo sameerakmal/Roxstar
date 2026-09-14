@@ -10,7 +10,9 @@ import { DuplicateKeyError } from '../errors/RepositoryError.js';
 import type { DraftEffect } from '../models/index.js';
 import { draftRepository, roomRepository } from '../repositories/index.js';
 import type { DraftRecord } from '../repositories/draftRepository.js';
+import { ROOM_EVENTS } from '../websocket/events.js';
 import type { DraftDto, SharedDraftDto } from './dto.js';
+import { publishToRoom } from './eventPublisher.js';
 import { requireActiveMembership } from './roomService.js';
 
 export type CreateDraftInput = {
@@ -96,7 +98,12 @@ export async function shareDraftWithRoom(
 
   try {
     const share = await draftRepository.shareDraftWithRoom(roomId, draftId, callerUserId);
-    return { created: true, share: toDto(share.sharedAt, share.sharedByUserId) };
+    const dto = toDto(share.sharedAt, share.sharedByUserId);
+    publishToRoom(roomId.toString(), ROOM_EVENTS.draftShared, {
+      roomId: roomId.toString(),
+      draft: dto,
+    });
+    return { created: true, share: dto };
   } catch (error: unknown) {
     if (error instanceof DuplicateKeyError) {
       const winner = await draftRepository.findShare(roomId, draftId);

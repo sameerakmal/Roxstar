@@ -88,3 +88,13 @@ export async function findMembershipHistory(roomId: Types.ObjectId): Promise<Roo
     .lean<RoomMemberRecord[]>()
     .exec();
 }
+
+// Boot reconciliation: after a restart no socket exists, so every persisted
+// connectionState is stale. Membership is untouched.
+export async function markAllDisconnected(): Promise<number> {
+  const result = await RoomMemberModel.updateMany(
+    { connectionState: 'CONNECTED' },
+    { $set: { connectionState: 'DISCONNECTED' } },
+  ).exec();
+  return result.modifiedCount;
+}

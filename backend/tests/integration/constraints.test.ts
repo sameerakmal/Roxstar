@@ -138,6 +138,7 @@ describe('spin participant constraints', () => {
       status: 'ELIMINATED',
       eliminationOrder: 1,
       eliminatedAt: new Date(),
+      eliminationReason: 'TIMER',
     });
 
     await expect(
@@ -147,6 +148,7 @@ describe('spin participant constraints', () => {
         status: 'ELIMINATED',
         eliminationOrder: 1,
         eliminatedAt: new Date(),
+        eliminationReason: 'TIMER',
       }),
     ).rejects.toMatchObject({ code: DUPLICATE_KEY });
   });
@@ -169,6 +171,7 @@ describe('spin participant constraints', () => {
       status: 'ELIMINATED' as const,
       eliminationOrder: 1,
       eliminatedAt: new Date(),
+      eliminationReason: 'TIMER' as const,
     };
     await SpinParticipantModel.create({ spinId: oid(), userId: oid(), ...eliminated });
     const other = await SpinParticipantModel.create({ spinId: oid(), userId: oid(), ...eliminated });

@@ -58,3 +58,43 @@ export class DraftNotOwnedError extends DomainError {
     super(`Caller does not own draft ${draftId}`);
   }
 }
+
+export class NotRoomOwnerError extends DomainError {
+  readonly code = 'NOT_ROOM_OWNER';
+
+  constructor(roomId: string) {
+    super(`Only the owner of room ${roomId} may start a spin`);
+  }
+}
+
+export class InsufficientPlayersError extends DomainError {
+  readonly code = 'INSUFFICIENT_PLAYERS';
+
+  constructor(count: number, minimum: number) {
+    super(`A spin needs at least ${String(minimum)} eligible players, found ${String(count)}`);
+  }
+}
+
+export class TooManyPlayersError extends DomainError {
+  readonly code = 'TOO_MANY_PLAYERS';
+
+  constructor(count: number, maximum: number) {
+    super(`A spin allows at most ${String(maximum)} eligible players, found ${String(count)}`);
+  }
+}
+
+export class SpinNotFoundError extends DomainError {
+  readonly code = 'SPIN_NOT_FOUND';
+
+  constructor(spinId: string) {
+    super(`No spin exists with id ${spinId}`);
+  }
+}
+
+export class ActiveSpinConflictError extends DomainError {
+  readonly code = 'ACTIVE_SPIN_EXISTS';
+
+  constructor(roomId: string) {
+    super(`Room ${roomId} already has an active spin`);
+  }
+}

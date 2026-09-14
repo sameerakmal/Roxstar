@@ -87,22 +87,22 @@ Assessment section B2 (20 points). All seven events below are mandatory per the 
 
 | # | Event | Required behavior (verbatim intent from the assessment) | Implementation task | Test / demo evidence |
 |---|---|---|---|---|
-| WS-1 | `user_joined` | Broadcast updated participant information | Emit to the room on join, carrying the updated participant info | Two-client demo (Demo checklist item 5); integration test asserting receipt |
-| WS-2 | `user_left` | Broadcast departure and clean presence after leave/disconnect | Emit on both explicit leave and transport disconnect; clean presence state in both paths | Demo: close the second client and observe `user_left`; test covering leave and abrupt disconnect |
-| WS-3 | `draft_shared` | Notify members that a Draft has been shared | Emit to the room when a Draft is shared, carrying Draft metadata | Demo checklist item 5; integration test |
-| WS-4 | `spin_started` | Publish active spin, eligible players and initial sequence state | Emit on successful spin start with spin id, eligible player list and initial sequence state | Demo checklist item 7; integration test asserting payload contents |
-| WS-5 | `user_eliminated` | Publish each elimination with updated remaining players | Emit once per elimination with the eliminated user and the updated remaining list | Demo: eliminations visible every 5 seconds; test asserting one event per elimination with a shrinking remaining list |
-| WS-6 | `winner_announced` | Publish final winner and completed spin state | Emit once when one participant remains, with the winner and the COMPLETED spin state | Demo: exactly one winner; test asserting exactly one `winner_announced` per spin |
-| WS-7 | `room_state` | Return latest state after connection or reconnection | Emit a full authoritative snapshot on connect and on reconnect, including any in-progress spin | Demo checklist item 8: reconnect / state-recovery flow; test that a client reconnecting mid-spin receives correct current state |
+| [x] WS-1 | `user_joined` | Broadcast updated participant information | Emit to the room on join, carrying the updated participant info | Two-client demo (Demo checklist item 5); integration test asserting receipt |
+| [x] WS-2 | `user_left` | Broadcast departure and clean presence after leave/disconnect | Emit on both explicit leave and transport disconnect; clean presence state in both paths | Demo: close the second client and observe `user_left`; test covering leave and abrupt disconnect |
+| [x] WS-3 | `draft_shared` | Notify members that a Draft has been shared | Emit to the room when a Draft is shared, carrying Draft metadata | Demo checklist item 5; integration test |
+| [x] WS-4 | `spin_started` | Publish active spin, eligible players and initial sequence state | Emit on successful spin start with spin id, eligible player list and initial sequence state | Demo checklist item 7; integration test asserting payload contents |
+| [x] WS-5 | `user_eliminated` | Publish each elimination with updated remaining players | Emit once per elimination with the eliminated user and the updated remaining list | Demo: eliminations visible every 5 seconds; test asserting one event per elimination with a shrinking remaining list |
+| [x] WS-6 | `winner_announced` | Publish final winner and completed spin state | Emit once when one participant remains, with the winner and the COMPLETED spin state | Demo: exactly one winner; test asserting exactly one `winner_announced` per spin |
+| [x] WS-7 | `room_state` | Return latest state after connection or reconnection | Emit a full authoritative snapshot on connect and on reconnect, including any in-progress spin | Demo checklist item 8: reconnect / state-recovery flow; test that a client reconnecting mid-spin receives correct current state |
 
 ### Scoring items
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| [~] WS-8 | Connection and disconnect management | Authenticate/identify the socket, map socket ↔ user ↔ room, join the socket room on connect, tear down cleanly on disconnect, handle duplicate connections for the same user | Test: connect, disconnect, verify presence cleanup and no orphaned socket-room membership | 5 (Connection and disconnect management) |
-| WS-9 | Correct event handling and room broadcasting | Broadcast strictly to the room's members; correct payload schema per event; no cross-room leakage | Integration test with two rooms asserting events do not cross; demo with two clients | 5 (Correct event handling and room broadcasting) |
-| WS-10 | Reconnect logic | Support client reconnect and re-attachment to the room, re-emitting `room_state`; define the disconnect grace behavior for room membership and spin eligibility (ties into SP-9) | Demo checklist item 8; test: drop and restore a connection mid-spin and confirm the client re-synchronizes | 5 (Reconnect logic) |
-| WS-11 | State synchronization | Guarantee that the `room_state` snapshot and the incremental event stream cannot diverge — snapshot-then-stream ordering, event sequencing so a late/duplicate event is detectable | Test: a client that misses events mid-spin ends with the same final state as one that received all events | 5 (State synchronization) |
+| [x] WS-8 | Connection and disconnect management | Authenticate/identify the socket, map socket ↔ user ↔ room, join the socket room on connect, tear down cleanly on disconnect, handle duplicate connections for the same user | Test: connect, disconnect, verify presence cleanup and no orphaned socket-room membership | 5 (Connection and disconnect management) |
+| [x] WS-9 | Correct event handling and room broadcasting | Broadcast strictly to the room's members; correct payload schema per event; no cross-room leakage | Integration test with two rooms asserting events do not cross; demo with two clients | 5 (Correct event handling and room broadcasting) |
+| [x] WS-10 | Reconnect logic | Support client reconnect and re-attachment to the room, re-emitting `room_state`; define the disconnect grace behavior for room membership and spin eligibility (ties into SP-9) | Demo checklist item 8; test: drop and restore a connection mid-spin and confirm the client re-synchronizes | 5 (Reconnect logic) |
+| [x] WS-11 | State synchronization | Guarantee that the `room_state` snapshot and the incremental event stream cannot diverge — snapshot-then-stream ordering, event sequencing so a late/duplicate event is detectable | Test: a client that misses events mid-spin ends with the same final state as one that received all events | 5 (State synchronization) |
 
 ---
 
@@ -114,18 +114,18 @@ Assessment section C (50 points). Core rules from C1; state machine `WAITING -> 
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| SP-1 | Validate and start the wheel — min 3 / max 20 eligible users; started manually by admin or room owner; only one active spin per room | Implement start validation: eligible-count bounds, caller is admin/room owner, no active spin already present in the room | Tests: start with 2 (reject), 3 (accept), 21 (reject), non-owner caller (reject), start while a spin is RUNNING (reject). Demo checklist item 6: start with at least 3 users | 5 (Validate and start the wheel) |
-| SP-2 | Generate and process eliminations — one active participant eliminated every 5 seconds after start | Implement the server-side 5-second elimination scheduler selecting one active participant per tick and updating status | Demo checklist item 7: eliminations visibly every 5 seconds. Test with a controllable clock asserting elimination cadence and one elimination per tick | 5 (Generate and process eliminations) |
-| SP-3 | Select exactly one valid winner — the last remaining participant | Stop elimination when one active participant remains; record that participant as the winner; optionally award virtual points (assessment: virtual points only, no wallet/payment) | Test: run N spins and assert exactly one winner each, and that the winner was never eliminated. Demo checklist item 7 | 5 (Select exactly one valid winner) |
-| SP-4 | Emit events in the correct order | Guarantee ordering: `spin_started` → `user_eliminated` × (n−1) → `winner_announced`, with persistence of the event sequence | Test asserting the exact recorded event order for a full spin; retrieve the persisted sequence via the Get Spin State/Result API | 5 (Emit events in the correct order) |
+| [x] SP-1 | Validate and start the wheel — min 3 / max 20 eligible users; started manually by admin or room owner; only one active spin per room | Implement start validation: eligible-count bounds, caller is admin/room owner, no active spin already present in the room | Tests: start with 2 (reject), 3 (accept), 21 (reject), non-owner caller (reject), start while a spin is RUNNING (reject). Demo checklist item 6: start with at least 3 users | 5 (Validate and start the wheel) |
+| [x] SP-2 | Generate and process eliminations — one active participant eliminated every 5 seconds after start | Implement the server-side 5-second elimination scheduler selecting one active participant per tick and updating status | Demo checklist item 7: eliminations visibly every 5 seconds. Test with a controllable clock asserting elimination cadence and one elimination per tick | 5 (Generate and process eliminations) |
+| [x] SP-3 | Select exactly one valid winner — the last remaining participant | Stop elimination when one active participant remains; record that participant as the winner; optionally award virtual points (assessment: virtual points only, no wallet/payment) | Test: run N spins and assert exactly one winner each, and that the winner was never eliminated. Demo checklist item 7 | 5 (Select exactly one valid winner) |
+| [x] SP-4 | Emit events in the correct order | Guarantee ordering: `spin_started` → `user_eliminated` × (n−1) → `winner_announced`, with persistence of the event sequence | Test asserting the exact recorded event order for a full spin; retrieve the persisted sequence via the Get Spin State/Result API | 5 (Emit events in the correct order) |
 
 ### C3. State management — 15 points
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| SP-5 | Room state consistency | Keep room state and spin state coherent: a room reflects its active spin, and room membership changes during a spin are reconciled against spin participation | Test: join/leave during a RUNNING spin leaves room state and spin state mutually consistent | 5 (Room state consistency) |
-| SP-6 | Spin lifecycle and valid transitions | Implement the state machine explicitly; reject illegal transitions (COMPLETED → RUNNING, ABORTED → RUNNING, double COMPLETED); persist each transition | Unit tests over the transition table covering every legal and a representative set of illegal transitions | 5 (Spin lifecycle and valid transitions) |
-| SP-7 | Participant eligibility and status tracking | Track per-participant eligibility and status (eligible / active / eliminated with order and time / winner); snapshot the eligible set at spin start | Test asserting elimination order and timestamps are recorded and that status transitions are one-way | 5 (Participant eligibility and status tracking) |
+| [x] SP-5 | Room state consistency | Keep room state and spin state coherent: a room reflects its active spin, and room membership changes during a spin are reconciled against spin participation | Test: join/leave during a RUNNING spin leaves room state and spin state mutually consistent | 5 (Room state consistency) |
+| [x] SP-6 | Spin lifecycle and valid transitions | Implement the state machine explicitly; reject illegal transitions (COMPLETED → RUNNING, ABORTED → RUNNING, double COMPLETED); persist each transition | Unit tests over the transition table covering every legal and a representative set of illegal transitions | 5 (Spin lifecycle and valid transitions) |
+| [x] SP-7 | Participant eligibility and status tracking | Track per-participant eligibility and status (eligible / active / eliminated with order and time / winner); snapshot the eligible set at spin start | Test asserting elimination order and timestamps are recorded and that status transitions are one-way | 5 (Participant eligibility and status tracking) |
 
 ### C4. Edge-case reasoning — 15 points
 
@@ -135,16 +135,16 @@ test each and a documented chosen outcome. All candidates below are named in the
 
 | # | Edge case (from the assessment's suggested list) | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| SP-8 | Duplicate start requests | Idempotency/locking on start so two concurrent or repeated start requests produce exactly one spin | Test firing concurrent start requests, asserting one spin and one `spin_started` | contributes to the 15-point band |
-| SP-9 | User departure during a spin | Define and implement the outcome (e.g. treat as eliminated / mark inactive) and keep the winner rule valid | Test: a participant leaves mid-spin; assert spin still completes with exactly one winner. Demo checklist item 9 | contributes |
-| SP-10 | Reconnect during a spin | Reconnecting client receives current spin state via `room_state` and resumes receiving elimination events | Demo checklist items 8 and 9; integration test | contributes |
-| SP-11 | Insufficient players | Reject start below 3; define behavior if the active count falls below the minimum mid-spin (e.g. ABORTED or complete-with-winner) and implement it | Tests for both the start-time rejection and the mid-spin shortfall path | contributes |
-| SP-12 | Last players leaving | Define and implement the outcome when all or all-but-one participants leave (transition to ABORTED or COMPLETED per documented rule) | Test draining participants mid-spin and asserting the documented terminal state | contributes |
-| SP-13 | Duplicate events | Make event emission and handling idempotent/deduplicated so a repeated elimination or winner event cannot double-apply | Test replaying an event and asserting state is unchanged | contributes |
-| SP-14 | Admin disconnect | Define and implement whether a RUNNING spin continues when the admin/owner disconnects | Test: disconnect the owner mid-spin and assert the documented outcome | contributes |
+| [x] SP-8 | Duplicate start requests | Idempotency/locking on start so two concurrent or repeated start requests produce exactly one spin | Test firing concurrent start requests, asserting one spin and one `spin_started` | contributes to the 15-point band |
+| [x] SP-9 | User departure during a spin | Define and implement the outcome (e.g. treat as eliminated / mark inactive) and keep the winner rule valid | Test: a participant leaves mid-spin; assert spin still completes with exactly one winner. Demo checklist item 9 | contributes |
+| [x] SP-10 | Reconnect during a spin | Reconnecting client receives current spin state via `room_state` and resumes receiving elimination events | Demo checklist items 8 and 9; integration test | contributes |
+| [x] SP-11 | Insufficient players | Reject start below 3; define behavior if the active count falls below the minimum mid-spin (e.g. ABORTED or complete-with-winner) and implement it | Tests for both the start-time rejection and the mid-spin shortfall path | contributes |
+| [x] SP-12 | Last players leaving | Define and implement the outcome when all or all-but-one participants leave (transition to ABORTED or COMPLETED per documented rule) | Test draining participants mid-spin and asserting the documented terminal state | contributes |
+| [x] SP-13 | Duplicate events | Make event emission and handling idempotent/deduplicated so a repeated elimination or winner event cannot double-apply | Test replaying an event and asserting state is unchanged | contributes |
+| [x] SP-14 | Admin disconnect | Define and implement whether a RUNNING spin continues when the admin/owner disconnects | Test: disconnect the owner mid-spin and assert the documented outcome | contributes |
 | SP-15 | Simultaneous joins | Serialize concurrent joins so the participant list and eligibility snapshot stay correct | Concurrency test with simultaneous joins | contributes |
-| SP-16 | Delayed timers | Handle tick drift/late timers so elimination cadence and ordering stay correct rather than compounding | Test with an artificially delayed tick asserting no skipped or doubled elimination | contributes |
-| SP-17 | Server restart | Define and implement recovery for a spin that was RUNNING at restart (resume from persisted state or transition to ABORTED) per a documented rule | Test: restart the process mid-spin and assert the documented recovery outcome | contributes |
+| [x] SP-16 | Delayed timers | Handle tick drift/late timers so elimination cadence and ordering stay correct rather than compounding | Test with an artificially delayed tick asserting no skipped or doubled elimination | contributes |
+| [x] SP-17 | Server restart | Define and implement recovery for a spin that was RUNNING at restart (resume from persisted state or transition to ABORTED) per a documented rule | Test: restart the process mid-spin and assert the documented recovery outcome | contributes |
 
 ---
 
@@ -156,12 +156,12 @@ themselves are scored under B1 (RM-1).
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
 | [x] BA-1 | Create Room | Implement the endpoint with owner assignment and initial room status | Integration test + OpenAPI entry | scored via RM-1 / D3 |
-| [~] BA-2 | Join Room | Implement join with membership creation and `user_joined` broadcast | Integration test asserting membership row and broadcast | scored via RM-1 / D3 |
-| [~] BA-3 | Leave Room | Implement leave with membership cleanup and `user_left` broadcast | Integration test covering leave and the disconnect path | scored via RM-1 / D3 |
-| [~] BA-4 | Get Room State | Implement the authoritative room snapshot including participants and any active spin | Test that the REST snapshot matches the `room_state` socket payload | scored via RM-1 / D3 |
-| [~] BA-5 | Share Draft | Implement sharing a Draft into a room (Draft metadata and hosted file location per the Draft entity) with `draft_shared` broadcast | Demo checklist item 5; integration test | scored via RM-1 / D3 |
-| BA-6 | Start Spin | Implement the spin-start endpoint delegating to the Spin Engine validation (SP-1) | Tests from SP-1; demo checklist item 6 | scored via C2 / D3 |
-| BA-7 | Get Spin State or Result | Implement retrieval of live spin state and final result including the persisted event sequence (user journey step 8) | Test: fetch mid-spin and post-spin; assert result matches broadcast events | scored via C2 / D3 |
+| [x] BA-2 | Join Room | Implement join with membership creation and `user_joined` broadcast | Integration test asserting membership row and broadcast | scored via RM-1 / D3 |
+| [x] BA-3 | Leave Room | Implement leave with membership cleanup and `user_left` broadcast | Integration test covering leave and the disconnect path | scored via RM-1 / D3 |
+| [x] BA-4 | Get Room State | Implement the authoritative room snapshot including participants and any active spin | Test that the REST snapshot matches the `room_state` socket payload | scored via RM-1 / D3 |
+| [x] BA-5 | Share Draft | Implement sharing a Draft into a room (Draft metadata and hosted file location per the Draft entity) with `draft_shared` broadcast | Demo checklist item 5; integration test | scored via RM-1 / D3 |
+| [x] BA-6 | Start Spin | Implement the spin-start endpoint delegating to the Spin Engine validation (SP-1) | Tests from SP-1; demo checklist item 6 | scored via C2 / D3 |
+| [x] BA-7 | Get Spin State or Result | Implement retrieval of live spin state and final result including the persisted event sequence (user journey step 8) | Test: fetch mid-spin and post-spin; assert result matches broadcast events | scored via C2 / D3 |
 | [x] BA-8 | Health / readiness endpoint | Implement health and readiness endpoints reporting process and dependency (database) status | Used by the cloud deployment health check (CL-3) and demo checklist item 10 | scored via D3 / E |
 | [~] BA-9 | Validation, error handling and idempotency | Central request validation, a consistent error envelope, and idempotent handling for repeat/retry-prone operations (start spin, join, share) | Tests per invalid input and per duplicate request | 5 (Validation, error handling and idempotency) |
 | [~] BA-10 | API/service organization and logging | Organize into routes → controllers → services → repositories with the Spin Engine as its own service; structured logging with request/room/spin correlation | Code walkthrough; log excerpt from a full spin showing correlated entries | 5 (API/service organization and logging) |
@@ -189,7 +189,7 @@ Assessment section D3 testing line (5 points) plus the evidence obligations acro
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| [~] TS-1 | Unit and integration testing | Unit tests for spin state machine transitions, elimination selection and validation rules; integration tests for the REST endpoints and the WebSocket event flows against a real database | Test suite runs in CI (CD-1) and locally per the README | 5 (Unit and integration testing) |
+| [x] TS-1 | Unit and integration testing | Unit tests for spin state machine transitions, elimination selection and validation rules; integration tests for the REST endpoints and the WebSocket event flows against a real database | Test suite runs in CI (CD-1) and locally per the README | 5 (Unit and integration testing) |
 | TS-2 | Full-spin integration test | End-to-end test: create room → three clients join → start spin → assert `spin_started`, two `user_eliminated`, one `winner_announced` in order → assert persisted result | Test output shown in the demo (Demo checklist item 10) | supports C2 (SP-4) |
 | TS-3 | Edge-case test coverage | One test per implemented edge case in SP-8..SP-17, each asserting the documented chosen outcome (required by the C4 quality rule) | Named tests mapping 1:1 to the documented edge-case list | supports C4 band |
 | TS-4 | Reconnect / state-sync test | Test that a reconnecting client receives `room_state` and converges with clients that stayed connected | Demo checklist item 8 | supports B2 (WS-10, WS-11) |
@@ -319,7 +319,7 @@ Socket.IO and Mongoose. No business logic, no database models, no Android work.
 | BA-8 | `[x]` | `GET /health` (liveness, never queries MongoDB) and `GET /ready` (200 connected / 503 unavailable), both tested. Note CL-3 — documenting health verification for the *cloud* deployment — remains unstarted |
 | BA-9 | `[~]` | Consistent error envelope, centralized error handler, 404 handling, Zod-validated environment config. No business-rule validation and no idempotency yet |
 | BA-10 | `[~]` | Layered layout (routes → controllers → services → repositories) and structured Pino logging with request logs. `services/` and `repositories/` are still empty |
-| WS-8 | `[~]` | Socket.IO initializes and logs connect/disconnect. No socket↔user↔room mapping, no presence cleanup |
+| [x] WS-8 | `[~]` | Socket.IO initializes and logs connect/disconnect. No socket↔user↔room mapping, no presence cleanup |
 | TS-1 | `[~]` | Vitest + Supertest harness with 6 passing tests (health, both ready branches, 404, error envelope, Socket.IO smoke). No model, room or spin tests |
 | DK-1 | `[x]` | Multi-stage Dockerfile (non-root `node` user, pinned `node:22-alpine`, `HEALTHCHECK` on `/ready`). Image builds (64MB) and runs; container reports `healthy` |
 | DK-2 | `[x]` | `infrastructure/docker-compose.yml` brings up MongoDB + backend together; verified end to end. Host port overridable via `BACKEND_PORT` |
@@ -409,6 +409,51 @@ where SP-14 (admin disconnect) is scored.
 (99/99), `npm run build` (47 modules), `npm audit` (0), plus a live end-to-end run against a real
 server confirming the 201/200 idempotency and the DTO shape.
 
-### Phase 4 — WebSocket room events and the spin engine (not started)
+### Phase 4 — WebSocket room events and the spin engine (complete)
 
-WS-1..WS-11, SP-1..SP-17, BA-6, BA-7.
+Real-time room events over Socket.IO and the server-authoritative spin engine.
+
+| Area | Delivered |
+|---|---|
+| WS-1..WS-11 | All seven mandatory events; presence, reconnect, cross-room isolation, snapshot-led synchronization |
+| SP-1..SP-14, SP-16, SP-17 | Start validation, 5s elimination cadence, single winner, ordered events, state machine, and the edge cases below |
+| BA-6, BA-7 | `POST /rooms/:roomId/spins`, `GET /spins/:spinId` |
+| BA-2..BA-5 | Promoted to `[x]`: the broadcasts they were waiting on now exist |
+
+**Documented edge-case outcomes (C4 quality rule).**
+
+| Case | Chosen outcome |
+|---|---|
+| Duplicate / concurrent start (SP-8) | Unique partial index settles it; exactly one spin, loser gets 409 |
+| Leave during RUNNING (SP-9) | Immediately eliminated, `eliminationReason: 'LEFT'` |
+| Disconnect during RUNNING | **No spin effect** — presence only, so reconnect can resume (SP-10) |
+| Reconnect during spin (SP-10) | `room_state` snapshot with `lastSequenceNumber` |
+| Actives below 3 mid-spin (SP-11) | Spin continues; 3–20 is a start-time rule only |
+| Actives reach 1 / 0 (SP-12) | COMPLETE with that winner / ABORT with no winner |
+| Duplicate events (SP-13) | Unique `(spinId, sequenceNumber)`; repeats rejected |
+| Owner leaves or disconnects (SP-14) | Spin continues; if a participant they are eliminated like anyone else; no ownership transfer |
+| Delayed timers (SP-16) | Absolute deadlines recomputed each tick; drift cannot accumulate |
+| Server restart (SP-17) | RUNNING spins resume with state-derived catch-up; orphan WAITING spins aborted |
+
+**`eliminationReason` — a correctness fix, not bookkeeping.** Recovery counts only `TIMER`
+eliminations against the schedule. Counting a `LEFT` elimination would make recovery think a
+scheduled tick had run and skip one, ending the spin early. See ARCHITECTURE.md §7.3.1.
+
+**Timers.** Self-scheduling `setTimeout` at absolute deadlines, one per spin, replaced rather than
+duplicated on reschedule. 5000 ms in production, injectable for tests. Timers decide only *when* to
+attempt work; MongoDB decides what happened, so a stray tick is a harmless no-op.
+
+**Concurrency.** Database invariants are the guarantee: unique partial index for one active spin,
+`status: 'ACTIVE'` filters for single-claim elimination, unique elimination order, unique event
+sequence, and CAS transitions for the exactly-once winner. The per-room mutex only orders the normal
+path; correctness does not depend on it.
+
+**No transactions.** Standalone MongoDB retained. Consequences documented: event-log gaps after a
+crash are repaired from `room_state`, and sequence numbers are unique and monotonic but not gapless.
+
+**Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (60/60), `npm run test:integration`
+(154/154), `npm run build` (58 modules), `npm audit` (0), Docker build.
+
+### Phase 5 — Android, Oboe audio, CI/CD and cloud deployment (not started)
+
+AA-1..AA-7, DR-1..DR-6, CD-1..CD-3, CL-1..CL-4, EN-1, and the documentation deliverables.
