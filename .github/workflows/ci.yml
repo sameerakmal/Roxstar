@@ -1,0 +1,82 @@
+name: CI
+
+# Runs on every pull request, and is called by the deploy workflow so that a release
+# can only ever come from a green build. Pushes to main do not trigger this directly —
+# deploy.yml calls it via workflow_call, which avoids running the same suite twice.
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, lint, test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      # The integration suite runs against a real MongoDB on purpose: the unique and
+      # partial indexes it asserts on cannot be exercised by an in-memory fake.
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests
+        run: npm run test:integration
+        env:
+          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/roxstar_test
+
+      - name: Production build
+        run: npm run build
+
+      # Informational: a new advisory should be visible without blocking a release.
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  docker:
+    name: Docker image builds
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Proves the image still builds before the deploy job pushes anything.
+      - name: Build the backend image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t roxstar-backend:ci ./backend

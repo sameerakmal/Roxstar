@@ -1,8 +1,9 @@
 # ARCHITECTURE.md — Roxstar Voice Draft, Room & Spin Wheel System
 
-Architecture for the Roxstar Candidate Technical Assessment. Sections describing the backend
-foundation and the data model are implemented (Phases 1-2); the room APIs, WebSocket room logic and
-spin engine described in §4-§7 are still design ahead of implementation.
+Architecture for the Roxstar Candidate Technical Assessment. The entire backend described here is
+implemented: foundation and data model (§1-§3), room APIs (§4), WebSocket events and presence (§5-§6),
+the spin engine (§7) and the deployment pipeline (§8). The Android client in §1.2 is the remaining
+unimplemented component.
 
 Scope boundaries are taken from the assessment: live audio streaming, WebRTC, LiveKit, AI, Kubernetes
 and multi-tenant architecture are **out of scope**. The spin wheel uses virtual points only; no
@@ -21,7 +22,7 @@ payment or wallet logic is implemented.
 | Node.js service | REST APIs, WebSocket gateway, room state, spin engine, validation, persistence, broadcasting | Node.js 22 + TypeScript, Express 5, Socket.IO |
 | Database | Users, rooms, memberships, drafts, spins, spin participants, spin events | MongoDB with Mongoose (see §9) |
 | Container image | Reproducible backend package | Docker |
-| Cloud host | Final hosted endpoint | One of AWS / GCP / Azure |
+| Cloud host | Final hosted endpoint | Google Cloud Run (`asia-south1`) + MongoDB Atlas (see §8) |
 
 ### 1.2 Topology
 
@@ -537,27 +538,45 @@ TASKS.md items SP-8 to SP-17:
 
 ## 8. Deployment architecture
 
-```
-Developer push
-      │
-      ▼
-CI/CD pipeline  ──►  install deps  ──►  run tests  ──►  build image  ──►  deploy
-      │                                     │                │
-      │                              fail = stop      push to registry
-      │                                                (commit-tagged)
-      ▼
-Cloud provider (one of AWS / GCP / Azure)
-      │
-      ├─ Container running the Node.js backend
-      │     ├─ config injected from environment variables
-      │     ├─ secrets injected from the provider's secret store
-      │     └─ health/readiness probes hitting /health and /ready
-      │
-      └─ Managed database instance
-            └─ migrations applied as part of release
+Provider: **Google Cloud Run** in `asia-south1`, with **MongoDB Atlas** as the managed database.
 
-Rollback: redeploy the previous commit-tagged image / previous revision
 ```
+push to main
+      │
+      ▼
+GitHub Actions
+  verify (ci.yml)  typecheck → lint → unit → integration (real MongoDB) → build
+      │  fail = stop, nothing is deployed
+      ▼
+  deploy (deploy.yml)
+      ├─ record the currently serving revision        ← rollback target
+      ├─ build image, tag :<commit-sha> and :latest
+      ├─ push to Artifact Registry (asia-south1)
+      ├─ gcloud run deploy
+      ├─ smoke test: /health, /ready, real WebSocket upgrade
+      └─ smoke fails → shift traffic back automatically
+      ▼
+Cloud Run service (roxstar-backend)
+      ├─ min-instances=1, max-instances=1   ← in-process state, see below
+      ├─ session affinity, request timeout 3600s (WebSockets)
+      ├─ PORT injected (8080); MONGODB_URI from Secret Manager
+      └─ startup probe /ready · liveness probe /health
+      │
+      ▼ TLS (mongodb+srv)
+MongoDB Atlas (managed, M0)
+```
+
+**Exactly one instance is a correctness requirement, not tuning.** Presence tracking
+(`presenceRegistry`), spin timers (`spinScheduler`) and the per-room mutex (`roomMutex`) are all
+in-process. A second instance would split that state — two schedulers could drive one spin. The
+database invariants in §3.3 would still hold, but the in-memory coordination would need replacing
+with a shared adapter, which is out of scope.
+
+Authentication to GCP uses **Workload Identity Federation**: GitHub mints a short-lived OIDC token
+per run, scoped by attribute condition to this repository. No long-lived service-account key exists.
+
+Rollback is a traffic switch between immutable revisions, not a rebuild — see
+[docs/deployment.md](docs/deployment.md) for the runbook.
 
 Environment-based configuration and documented secrets handling are required by Section E; no
 credentials are committed to the repository, and an example environment file with placeholder values
@@ -584,11 +603,18 @@ submission, so the hosted endpoint is a submission gate rather than an optional 
 referential integrity and the eligible-count bounds are enforced in the service layer rather than by
 the engine. Multi-document atomicity, where required, needs an explicit transaction on a replica set.
 
-### 9.2 Still open
+### 9.2 Settled in Phase 5
+
+| Decision | Choice | Justification |
+|---|---|---|
+| Cloud provider | **Google Cloud Run** (`asia-south1`) | Native WebSocket support, runs the existing Dockerfile unchanged, managed TLS, immutable revisions so rollback is a traffic switch, and Secret Manager integration. AWS App Runner lacks dependable WebSocket support; ECS+ALB and Kubernetes add infrastructure for no rubric gain |
+| Production database | **MongoDB Atlas** (managed) | The development compose MongoDB is not suitable for production; Atlas gives managed backups and TLS with no new infrastructure |
+| CI/CD | **GitHub Actions** | Already where the repository lives; Workload Identity Federation removes long-lived cloud keys |
+
+### 9.3 Still open
 
 | Decision | Options allowed by the assessment | Note |
 |---|---|---|
-| Cloud provider | AWS, GCP or Azure | Exactly one; local-only not accepted |
 | Voice effect | Echo, Reverb or Pitch Shift | At least one; must sit in the Oboe/native path where practical |
 | Abort conditions | Not enumerated by the assessment | The `ABORTED` branch exists in C1; which conditions trigger it is a documented design decision |
 | Room status values | Not enumerated | Room "status" is required by the Room entity; the value set is a design decision |

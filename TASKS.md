@@ -203,8 +203,8 @@ Assessment section E (Docker packaging, 5 points).
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| [~] DK-1 | Package the Node.js backend using Docker | Write the backend Dockerfile: pinned base image, dependency install, production build, non-root user, exposed port, and a container-level health check aligned with BA-8 | `docker build` and `docker run` reproducibly start the backend; show the image running | 5 (Docker packaging) |
-| [~] DK-2 | Local development composition | Provide local orchestration for backend + database so the README clean-start instructions work end to end | README clean-start walkthrough succeeds on a fresh machine (F: README, 5 pts) | supports DK-1 and F |
+| [x] DK-1 | Package the Node.js backend using Docker | Write the backend Dockerfile: pinned base image, dependency install, production build, non-root user, exposed port, and a container-level health check aligned with BA-8 | `docker build` and `docker run` reproducibly start the backend; show the image running | 5 (Docker packaging) |
+| [x] DK-2 | Local development composition | Provide local orchestration for backend + database so the README clean-start instructions work end to end | README clean-start walkthrough succeeds on a fresh machine (F: README, 5 pts) | supports DK-1 and F |
 
 Assessment note: Docker may be used locally during development, but a local-only backend is **not**
 accepted as the final submission — the cloud deployment (CL-1) is mandatory.
@@ -217,9 +217,9 @@ Assessment section E (CI/CD automation, 5 points).
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| CD-1 | Pipeline installs dependencies, runs tests, builds and deploys | Implement the pipeline with those four stages in order, failing the build on test failure and deploying only from a successful build | Pipeline run history showing the four stages; a green run and a deliberately failing run. Demo checklist item 10: CI/CD evidence | 5 (CI/CD automation) |
-| CD-2 | Pipeline builds and publishes the Docker image | Build the image in CI and push it to the chosen cloud's registry, tagged per commit for traceability | Registry showing commit-tagged images | supports CD-1 and CL-1 |
-| CD-3 | Secrets in the pipeline | Store deployment credentials as CI secrets, never in the repository; document the handling | Written secrets-handling section (E requirement); no credentials in git history | supports EN-1 |
+| [~] CD-1 | Pipeline installs dependencies, runs tests, builds and deploys | Implement the pipeline with those four stages in order, failing the build on test failure and deploying only from a successful build | Pipeline run history showing the four stages; a green run and a deliberately failing run. Demo checklist item 10: CI/CD evidence | 5 (CI/CD automation) |
+| [~] CD-2 | Pipeline builds and publishes the Docker image | Build the image in CI and push it to the chosen cloud's registry, tagged per commit for traceability | Registry showing commit-tagged images | supports CD-1 and CL-1 |
+| [~] CD-3 | Secrets in the pipeline | Store deployment credentials as CI secrets, never in the repository; document the handling | Written secrets-handling section (E requirement); no credentials in git history | supports EN-1 |
 
 ---
 
@@ -229,11 +229,11 @@ Assessment section E (working cloud deployment 5 pts, environment configuration 
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| CL-1 | Deploy to AWS, GCP or Azure — one provider | Deploy the containerized backend and its managed database to the chosen provider; ensure the WebSocket transport works through the chosen ingress | Live hosted endpoint reachable during the demo (Demo checklist item 10); submission field "Cloud provider and endpoint" | 5 (Working cloud deployment) |
-| CL-2 | Working hosted endpoint or clear deployment evidence | Publish the endpoint URL and capture deployment evidence (console/CLI output, service status) | Hosted endpoint demonstrated live plus captured evidence in the repo | (see CL-1) |
-| CL-3 | Health verification | Document and demonstrate how deployment health is verified using the health/readiness endpoint (BA-8) | Health check output against the hosted endpoint | part of EN-1 band |
-| CL-4 | Rollback approach | Document the rollback path (redeploy prior image tag / revision rollback) and verify it works | Documented rollback procedure plus evidence of an executed or rehearsed rollback | part of EN-1 band |
-| [~] EN-1 | Environment-based configuration and documented secrets handling | Externalize all configuration to environment variables (database URL, port, log level); document how secrets are stored and injected; commit an example env file with no real values | Config documented in README; no secrets in the repo; deployment reads config from the environment | 5 (Environment configuration and release safety) |
+| [~] CL-1 | Deploy to AWS, GCP or Azure — one provider | Deploy the containerized backend and its managed database to the chosen provider; ensure the WebSocket transport works through the chosen ingress | Live hosted endpoint reachable during the demo (Demo checklist item 10); submission field "Cloud provider and endpoint" | 5 (Working cloud deployment) |
+| [~] CL-2 | Working hosted endpoint or clear deployment evidence | Publish the endpoint URL and capture deployment evidence (console/CLI output, service status) | Hosted endpoint demonstrated live plus captured evidence in the repo | (see CL-1) |
+| [~] CL-3 | Health verification | Document and demonstrate how deployment health is verified using the health/readiness endpoint (BA-8) | Health check output against the hosted endpoint | part of EN-1 band |
+| [~] CL-4 | Rollback approach | Document the rollback path (redeploy prior image tag / revision rollback) and verify it works | Documented rollback procedure plus evidence of an executed or rehearsed rollback | part of EN-1 band |
+| [x] EN-1 | Environment-based configuration and documented secrets handling | Externalize all configuration to environment variables (database URL, port, log level); document how secrets are stored and injected; commit an example env file with no real values | Config documented in README; no secrets in the repo; deployment reads config from the environment | 5 (Environment configuration and release safety) |
 
 ---
 
@@ -454,6 +454,36 @@ crash are repaired from `room_state`, and sequence numbers are unique and monoto
 **Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (60/60), `npm run test:integration`
 (154/154), `npm run build` (58 modules), `npm audit` (0), Docker build.
 
-### Phase 5 — Android, Oboe audio, CI/CD and cloud deployment (not started)
+### Phase 5 — Cloud and DevOps (implemented; awaiting a live deploy)
 
-AA-1..AA-7, DR-1..DR-6, CD-1..CD-3, CL-1..CL-4, EN-1, and the documentation deliverables.
+Docker production hardening, GitHub Actions CI/CD, and Cloud Run + MongoDB Atlas deployment
+configuration. Everything is written and verified locally; the one-time GCP/Atlas setup and the
+first production deploy still need real credentials.
+
+| Item | Status | What exists / what is outstanding |
+|---|---|---|
+| DK-1 | `[x]` | Multi-stage pinned image, non-root, OCI revision label, `HEALTHCHECK` on `/ready` now following `PORT` rather than assuming 3000 |
+| DK-2 | `[x]` | Development compose unchanged and still the documented local path |
+| CD-1 | `[~]` | `ci.yml` installs → typechecks → lints → unit → integration (real MongoDB service) → builds; `deploy.yml` calls it and deploys only on success. **Not yet executed on GitHub** |
+| CD-2 | `[~]` | Image built and pushed to Artifact Registry tagged `:<commit-sha>` and `:latest`, with the SHA also baked in as an OCI label. **Needs a real registry push** |
+| CD-3 | `[~]` | Workload Identity Federation — short-lived OIDC tokens, no long-lived key. Secrets handling documented. **Needs GitHub secrets configured** |
+| CL-1 | `[~]` | Cloud Run deploy configured for `asia-south1` with WebSocket-safe settings; Atlas is the managed database. **Needs the actual deploy** |
+| CL-2 | `[~]` | Workflow publishes the URL and a run summary. **Needs a live endpoint** |
+| CL-3 | `[~]` | `/health` → liveness, `/ready` → startup/readiness; `scripts/smoke.mjs` asserts both plus a real WebSocket upgrade. **Verified locally, not yet against the cloud** |
+| CL-4 | `[~]` | Rollback runbook plus automatic traffic-shift on smoke-test failure. **Needs a rehearsal against a live service** |
+| EN-1 | `[x]` | All config via environment, Zod-validated with fail-fast; `MONGODB_URI` in Secret Manager; `.env` git-ignored; `.env.example` completed |
+
+**Defect fixed.** `.env.example` never gained `SPIN_ELIMINATION_INTERVAL_MS` when Phase 4 added it
+to the config schema, so the template disagreed with the code it documents.
+
+**Key constraint recorded.** The service is pinned to exactly one instance because presence, spin
+timers and the room mutex are in-process. This is enforced in the deploy command and explained in
+ARCHITECTURE.md §8 and docs/deployment.md.
+
+**Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (60/60), `npm run test:integration`
+(154/154), `npm run build`, `npm audit` (0), Docker build, workflow YAML parse, and the smoke test
+run against a local container.
+
+### Phase 6 — Android, Oboe audio and the documentation deliverables (not started)
+
+AA-1..AA-7, DR-1..DR-6, and the Section F diagram/API deliverables.

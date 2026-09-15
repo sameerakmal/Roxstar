@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:all": "npm run test && npm run test:integration"
+    "test:all": "npm run test && npm run test:integration",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

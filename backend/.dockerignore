@@ -2,7 +2,10 @@ node_modules
 dist
 coverage
 tests
+scripts
 .env
 *.log
+*.md
 Dockerfile
 .dockerignore
+.github

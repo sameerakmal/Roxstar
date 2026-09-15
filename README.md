@@ -8,8 +8,9 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 
 ## Status
 
-This repository is being built in phases. **Phases 1-4 are complete** (backend foundation; database
-models and repositories; room REST API; real-time events and the spin engine).
+This repository is being built in phases. **Phases 1-5 are complete** (backend foundation; database
+models and repositories; room REST API; real-time events and the spin engine; cloud and DevOps
+configuration).
 
 | Area | Status |
 |---|---|
@@ -24,10 +25,13 @@ models and repositories; room REST API; real-time events and the spin engine).
 | Spin engine (server-authoritative, 5s eliminations, recovery) | Done |
 | Test harness (Vitest + Supertest + socket.io-client) | Done — 60 unit, 154 integration |
 | Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| Android app, Oboe audio, CI/CD, cloud deploy | **Not started** |
+| CI/CD pipeline and Cloud Run deployment config | Written and locally verified — awaits a live deploy |
+| Android app, Oboe audio | **Not started** |
 
 The backend is feature-complete for the assessment's server-side scope: rooms, drafts, real-time
-events and the multiplayer spin. No Android, audio, CI/CD or cloud deployment work exists yet.
+events and the multiplayer spin, plus the CI/CD and cloud deployment configuration. No Android or
+audio work exists yet. The deployment pipeline is committed but has not been run against real GCP
+and Atlas accounts.
 
 ## Technology stack
 
@@ -128,6 +132,7 @@ Run from `backend/`:
 | `npm run test:watch` | Unit tests in watch mode |
 | `npm run typecheck` | Type-check `src` and `tests` without emitting |
 | `npm run lint` | Lint with ESLint |
+| `npm run smoke -- <url>` | Post-deployment check: health, readiness, WebSocket upgrade |
 
 ## Endpoints
 
@@ -356,6 +361,53 @@ cd backend
 npm run build
 npm start
 ```
+
+## Deployment
+
+The backend deploys to **Google Cloud Run** (`asia-south1`) with **MongoDB Atlas** as the managed
+production database. Full instructions, secrets handling and the rollback runbook are in
+**[docs/deployment.md](docs/deployment.md)**.
+
+```
+push to main → CI (typecheck, lint, unit, integration, build)
+             → build + push image tagged :<commit-sha>
+             → deploy to Cloud Run
+             → smoke test (/health, /ready, real WebSocket upgrade)
+             → automatic rollback if the smoke test fails
+```
+
+One-time setup:
+
+```bash
+export GITHUB_REPOSITORY="your-org/your-repo"
+./infrastructure/cloudrun-setup.sh     # registry, secret, service accounts, WIF
+```
+
+Verify any deployment, local or hosted:
+
+```bash
+cd backend && npm run smoke -- https://<your-service-url>
+```
+
+### Production configuration
+
+| Variable | Value | Source |
+|---|---|---|
+| `NODE_ENV` | `production` | Cloud Run env var |
+| `PORT` | `8080` | **Injected by Cloud Run** |
+| `MONGODB_URI` | Atlas SRV string | **Secret Manager** — never in Git |
+| `LOG_LEVEL` | `info` | Cloud Run env var |
+| `SPIN_ELIMINATION_INTERVAL_MS` | `5000` | Cloud Run env var |
+
+GCP access from CI uses **Workload Identity Federation**, so no long-lived service-account key
+exists. `.env` is git-ignored; only `.env.example` is tracked.
+
+### Why exactly one instance
+
+The service runs with `min-instances=1, max-instances=1`. Presence tracking, spin timers and the
+per-room mutex are in-process, so a second instance would split that state. Scaling horizontally
+would need the Socket.IO Redis adapter and a shared scheduler — out of scope here, and recorded as a
+known limitation rather than hidden.
 
 ## Docker
 
