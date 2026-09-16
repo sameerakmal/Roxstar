@@ -49,6 +49,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Exposes the Oboe AAR's prefab package to CMake via find_package(oboe).
+        prefab = true
     }
 
     // D2 — native sources live in native-audio/ at the repo root, not under app/src.
@@ -68,7 +70,19 @@ android {
     }
 }
 
+// NativeContractTest reads native-audio/AudioEngine.h to verify the C++/Kotlin
+// enum contract. Declaring it as an input stops Gradle from treating the test as
+// up-to-date when only the header changed — otherwise the guard silently skips.
+tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file("../native-audio/AudioEngine.h"))
+        .withPropertyName("nativeAudioEngineHeader")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
+    // Native audio I/O. Consumed by native-audio/CMakeLists.txt through prefab.
+    implementation("com.google.oboe:oboe:1.9.3")
+
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.activity:activity-compose:1.13.0")
