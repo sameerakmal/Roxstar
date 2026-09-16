@@ -1,0 +1,121 @@
+# Declarative baseline for the Roxstar backend Container App.
+#
+# This file is a TEMPLATE, not a deployable document. infrastructure/azure-setup.sh
+# renders the __PLACEHOLDERS__ into a temporary file (mode 600, deleted afterwards)
+# and passes that to `az containerapp create --yaml`. The MongoDB connection string is
+# injected at render time and therefore never appears in this repository.
+#
+# After creation the deploy workflow only ever changes the image
+# (`az containerapp update --image`), which preserves everything defined here —
+# ingress, probes, secrets and the replica pinning below.
+#
+# Placeholders:
+#   __LOCATION__            centralindia
+#   __ENVIRONMENT_ID__      resource id of the Container Apps environment
+#   __IDENTITY_RESOURCE_ID__ user-assigned managed identity used to pull from ACR
+#   __ACR_LOGIN_SERVER__    <registry>.azurecr.io
+#   __IMAGE__               fully qualified image reference
+#   __MONGODB_URI__         MongoDB Atlas SRV string (render time only)
+
+location: __LOCATION__
+
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    __IDENTITY_RESOURCE_ID__: {}
+
+properties:
+  managedEnvironmentId: __ENVIRONMENT_ID__
+
+  configuration:
+    # Single revision mode: a deploy replaces the running revision rather than
+    # splitting traffic. Traffic splitting would mean two revisions serving at once,
+    # which conflicts with the single-replica requirement below.
+    activeRevisionsMode: Single
+
+    ingress:
+      external: true
+      # Azure Container Apps does NOT inject PORT the way Cloud Run did, so the port
+      # is stated explicitly here and as a PORT env var below. The two must agree.
+      targetPort: 3000
+      # `auto` negotiates HTTP/1.1, which is what the WebSocket upgrade needs.
+      transport: auto
+      allowInsecure: false
+      stickySessions:
+        affinity: sticky
+
+    registries:
+      # Pull with the user-assigned managed identity — no registry username or
+      # password exists anywhere.
+      - server: __ACR_LOGIN_SERVER__
+        identity: __IDENTITY_RESOURCE_ID__
+
+    secrets:
+      - name: mongodb-uri
+        value: __MONGODB_URI__
+
+  template:
+    containers:
+      - name: roxstar-backend
+        image: __IMAGE__
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+
+        env:
+          - name: NODE_ENV
+            value: production
+          - name: PORT
+            value: '3000'
+          - name: LOG_LEVEL
+            value: info
+          - name: SPIN_ELIMINATION_INTERVAL_MS
+            value: '5000'
+          - name: MONGODB_URI
+            secretRef: mongodb-uri
+
+        probes:
+          # Liveness is process health only and never touches MongoDB, so a database
+          # outage cannot cause the container to be restarted.
+          - type: Liveness
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness requires a live database, so traffic stops being routed while
+          # MongoDB is unreachable without the process being killed.
+          - type: Readiness
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Startup gates the revision until spin recovery has run and the database is
+          # connected; only then does the revision begin receiving traffic.
+          - type: Startup
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+
+    scale:
+      # EXACTLY ONE REPLICA — a correctness requirement, not tuning.
+      #
+      # presenceRegistry, spinScheduler and roomMutex hold in-process state. A second
+      # replica would split it: two schedulers could drive the same spin. The database
+      # invariants (unique partial indexes, conditional updates) would still prevent
+      # corruption, but presence and timing would be wrong.
+      #
+      # The deploy workflow re-asserts these values after every deployment.
+      minReplicas: 1
+      maxReplicas: 1

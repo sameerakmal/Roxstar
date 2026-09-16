@@ -456,29 +456,35 @@ crash are repaired from `room_state`, and sequence numbers are unique and monoto
 
 ### Phase 5 — Cloud and DevOps (implemented; awaiting a live deploy)
 
-Docker production hardening, GitHub Actions CI/CD, and Cloud Run + MongoDB Atlas deployment
-configuration. Everything is written and verified locally; the one-time GCP/Atlas setup and the
-first production deploy still need real credentials.
+Docker production hardening, GitHub Actions CI/CD, and Azure Container Apps + MongoDB Atlas
+deployment configuration. Everything is written and verified locally; the one-time Azure setup and
+the first production deploy still need a live subscription.
+
+> The deployment target moved from Google Cloud Run to Azure Container Apps. The original GCP
+> implementation remains in git history at commit `71fdf18`; nothing in the application changed for
+> the migration.
 
 | Item | Status | What exists / what is outstanding |
 |---|---|---|
 | DK-1 | `[x]` | Multi-stage pinned image, non-root, OCI revision label, `HEALTHCHECK` on `/ready` now following `PORT` rather than assuming 3000 |
 | DK-2 | `[x]` | Development compose unchanged and still the documented local path |
 | CD-1 | `[~]` | `ci.yml` installs → typechecks → lints → unit → integration (real MongoDB service) → builds; `deploy.yml` calls it and deploys only on success. **Not yet executed on GitHub** |
-| CD-2 | `[~]` | Image built and pushed to Artifact Registry tagged `:<commit-sha>` and `:latest`, with the SHA also baked in as an OCI label. **Needs a real registry push** |
-| CD-3 | `[~]` | Workload Identity Federation — short-lived OIDC tokens, no long-lived key. Secrets handling documented. **Needs GitHub secrets configured** |
-| CL-1 | `[~]` | Cloud Run deploy configured for `asia-south1` with WebSocket-safe settings; Atlas is the managed database. **Needs the actual deploy** |
+| CD-2 | `[~]` | Image built and pushed to Azure Container Registry tagged `:<commit-sha>` and `:latest`, with the SHA also baked in as an OCI label. **Needs a real registry push** |
+| CD-3 | `[~]` | GitHub OIDC federation — short-lived tokens, no Azure client secret; registry pulls use a managed identity, so no registry password either. **Needs GitHub secrets configured** |
+| CL-1 | `[~]` | Container Apps deploy configured for `centralindia` with WebSocket-safe settings and replicas pinned 1/1; Atlas is the managed database. **Needs the actual deploy** |
 | CL-2 | `[~]` | Workflow publishes the URL and a run summary. **Needs a live endpoint** |
 | CL-3 | `[~]` | `/health` → liveness, `/ready` → startup/readiness; `scripts/smoke.mjs` asserts both plus a real WebSocket upgrade. **Verified locally, not yet against the cloud** |
 | CL-4 | `[~]` | Rollback runbook plus automatic traffic-shift on smoke-test failure. **Needs a rehearsal against a live service** |
-| EN-1 | `[x]` | All config via environment, Zod-validated with fail-fast; `MONGODB_URI` in Secret Manager; `.env` git-ignored; `.env.example` completed |
+| EN-1 | `[x]` | All config via environment, Zod-validated with fail-fast; `MONGODB_URI` in a Container Apps secret; `PORT`/`targetPort` set explicitly since Azure injects neither; `.env` git-ignored; `.env.example` completed |
 
 **Defect fixed.** `.env.example` never gained `SPIN_ELIMINATION_INTERVAL_MS` when Phase 4 added it
 to the config schema, so the template disagreed with the code it documents.
 
-**Key constraint recorded.** The service is pinned to exactly one instance because presence, spin
-timers and the room mutex are in-process. This is enforced in the deploy command and explained in
-ARCHITECTURE.md §8 and docs/deployment.md.
+**Key constraint recorded and enforced.** The service is pinned to exactly one replica because
+presence, spin timers and the room mutex are in-process. It is declared in
+`infrastructure/containerapp.yaml`, and the deploy workflow **asserts `minReplicas`/`maxReplicas` are
+still 1/1 and the revision mode is still Single** after every deployment, failing the release
+otherwise. Explained in ARCHITECTURE.md §8 and docs/deployment.md.
 
 **Verified by:** `npm run typecheck`, `npm run lint`, `npm test` (60/60), `npm run test:integration`
 (154/154), `npm run build`, `npm audit` (0), Docker build, workflow YAML parse, and the smoke test

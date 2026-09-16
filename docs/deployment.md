@@ -1,41 +1,46 @@
 # Deployment Runbook
 
-Production deployment of the Roxstar backend to **Google Cloud Run** (`asia-south1`) with
-**MongoDB Atlas** as the managed database.
+Production deployment of the Roxstar backend to **Azure Container Apps** (`centralindia`)
+with **MongoDB Atlas** as the managed database.
 
 | Setting | Value |
 |---|---|
-| GCP project | `roxstar-backend` |
-| Region | `asia-south1` |
-| Cloud Run service | `roxstar-backend` |
-| Artifact Registry repo | `roxstar` |
-| Secret | `roxstar-mongodb-uri` (Secret Manager) |
-| Database | MongoDB Atlas (managed) — **not** the development compose container |
+| Resource group | `roxstar-backend-rg` |
+| Region | `centralindia` |
+| Container App | `roxstar-backend` |
+| Container Apps environment | `roxstar-env` |
+| Container registry | set by you — **globally unique**, e.g. `roxstaracr1234` |
+| Pull identity | `roxstar-backend-id` (user-assigned managed identity) |
+| Deployer | `roxstar-github-deployer` (Entra app, OIDC federated) |
+| Database | MongoDB Atlas — **not** the development compose container |
 
-Every value above is overridable through GitHub repository variables; the defaults match this
-project.
+Every value is overridable through GitHub repository variables.
 
 ---
 
 ## 1. Why this shape
 
-**One instance, deliberately.** Presence tracking, spin elimination timers and the per-room mutex
-are in-process state (`presenceRegistry`, `spinScheduler`, `roomMutex`). A second instance would
-split that state: two schedulers could drive one spin, and presence would be wrong. The service is
-therefore pinned to `--min-instances=1 --max-instances=1`.
+**One replica, deliberately.** `presenceRegistry`, `spinScheduler` and `roomMutex` hold in-process
+state. A second replica would split it — two schedulers could drive the same spin, and presence would
+be wrong. The app is pinned to `minReplicas: 1, maxReplicas: 1`, and the deploy workflow **asserts
+that after every deployment** rather than trusting it.
 
-This is a deliberate trade-off, not an oversight. Horizontal scaling would need the Socket.IO Redis
-adapter and a shared scheduler, which is explicitly outside the assessment's scope. The database
-invariants (unique partial indexes, conditional updates) would still hold; only the in-memory
-coordination would need replacing.
+Scaling out would need the Socket.IO Redis adapter and a shared scheduler, which is outside this
+assessment's scope. The database invariants (unique partial indexes, conditional updates) would still
+hold; only the in-memory coordination would need replacing.
 
-`--min-instances=1` also avoids scale-to-zero, which would drop live WebSocket connections. Even so,
-a restart is survivable: `recoverSpins()` runs before the server accepts traffic and resumes any
-`RUNNING` spin from persisted state.
+**Single revision mode, not traffic splitting.** Multi-revision traffic splitting would run two
+revisions concurrently, contradicting the single-replica rule. Rollback is therefore an image
+restore, which is deterministic and needs no rebuild because registry images are immutable.
 
-**Cloud Run, specifically**, because it supports WebSockets natively, runs our existing Dockerfile
-unchanged, terminates TLS for us, keeps every revision immutable (making rollback a traffic switch
-rather than a rebuild), and integrates with Secret Manager.
+**No secrets anywhere.** GitHub authenticates to Azure by OIDC federation, so no Azure client secret
+exists. The registry's admin user is disabled, so no registry password exists — Container Apps pulls
+using a managed identity holding `AcrPull` on that one registry.
+
+**Azure Container Apps, specifically**, because it supports WebSockets natively, runs the existing
+Dockerfile unchanged, terminates TLS, supports HTTP probes on `/health` and `/ready`, and sends
+`SIGTERM` for graceful shutdown — which is what lets spin timers stop cleanly and `recoverSpins()`
+resume them on the next revision.
 
 ---
 
@@ -43,42 +48,58 @@ rather than a rebuild), and integrates with Secret Manager.
 
 ### 2.1 MongoDB Atlas
 
-1. Create a free **M0** cluster.
-2. Create a database user with a strong generated password, scoped to `readWrite` on the
-   `roxstar` database.
-3. **Network access:** add `0.0.0.0/0`.
+Already configured. Two things must remain true:
 
-   > Cloud Run egresses from a dynamic address pool, so there is no stable IP to allowlist. The
-   > security boundary is therefore SCRAM credentials plus TLS, both enforced by Atlas. The
-   > production-grade alternative is a VPC connector with Cloud NAT and a reserved static IP,
-   > which adds infrastructure beyond this assessment's scope. This is a documented,
-   > deliberate demo-grade trade-off.
+1. A database user with `readWrite` on the `roxstar` database.
+2. **Network access:** `0.0.0.0/0`.
 
-4. Copy the SRV connection string. It goes into Secret Manager in the next step and **never**
-   into Git.
+   > Container Apps egresses from a dynamic address pool, so there is no stable IP to allowlist. The
+   > security boundary is therefore SCRAM credentials plus TLS. The production-grade alternative is a
+   > VNet-integrated environment with a NAT gateway and a static outbound IP, which adds
+   > infrastructure beyond this assessment's scope. A documented, deliberate trade-off.
 
-### 2.2 Google Cloud
+### 2.2 Azure
+
+Registry names are globally unique across all of Azure, so you must choose one:
 
 ```bash
 export GITHUB_REPOSITORY="your-org/your-repo"
-./infrastructure/cloudrun-setup.sh
+export ACR_NAME="roxstaracr$RANDOM"          # 5-50 alphanumeric, no hyphens
+./infrastructure/azure-setup.sh
 ```
 
-The script enables the required APIs, creates the Artifact Registry repository, stores the Atlas
-string in Secret Manager (read from stdin, so it stays out of shell history), creates the runtime
-and deployer service accounts, grants least-privilege roles, and configures Workload Identity
-Federation. It is idempotent.
+The script is idempotent and creates: the registry (admin user disabled), the pull identity with
+`AcrPull`, the Container Apps environment, the Container App itself from
+`infrastructure/containerapp.yaml`, the deployer app registration, **both** federated credentials, and
+the two narrowly scoped role assignments.
+
+It prompts for the Atlas connection string with **hidden input** and renders it into a temporary file
+(mode 600, deleted on exit) that `az containerapp create --yaml` consumes. The string never touches
+the repository or your shell history.
+
+> **Expected:** the first revision runs a placeholder image and reports unhealthy, because the
+> placeholder does not serve `/ready`. The first deployment replaces it. This is not an error.
 
 ### 2.3 GitHub configuration
 
-From the script's output, add under **Settings → Secrets and variables → Actions**:
+Create an **environment named `production`** (Settings → Environments). `deploy.yml` declares it, and
+one federated credential is bound to that subject — without the environment, the job cannot
+authenticate.
+
+Then add what the script prints:
 
 | Kind | Name | Value |
 |---|---|---|
-| Secret | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full provider resource path |
-| Secret | `GCP_DEPLOYER_SERVICE_ACCOUNT` | `roxstar-backend-deployer@…` |
-| Variable | `GCP_PROJECT_ID` | `roxstar-backend` *(optional)* |
-| Variable | `GCP_REGION` | `asia-south1` *(optional)* |
+| Secret | `AZURE_CLIENT_ID` | Deployer app id |
+| Secret | `AZURE_TENANT_ID` | Directory tenant id |
+| Secret | `AZURE_SUBSCRIPTION_ID` | Subscription id |
+| Variable | `ACR_NAME` | **Required** — no safe default exists |
+| Variable | `AZURE_RESOURCE_GROUP` | `roxstar-backend-rg` *(optional)* |
+| Variable | `AZURE_REGION` | `centralindia` *(optional)* |
+| Variable | `CONTAINERAPP_NAME` | `roxstar-backend` *(optional)* |
+
+Those three ids are identifiers rather than credentials — they grant nothing without the federation
+binding — but are stored as secrets by convention.
 
 ---
 
@@ -86,135 +107,137 @@ From the script's output, add under **Settings → Secrets and variables → Act
 
 | Secret | Stored in | Reaches the app as |
 |---|---|---|
-| MongoDB connection string | GCP Secret Manager | `MONGODB_URI` env var, mounted by Cloud Run |
-| GCP deploy credentials | GitHub Actions secrets | Short-lived OIDC token, exchanged at run time |
+| MongoDB connection string | Container Apps secret `mongodb-uri` | `MONGODB_URI`, via `secretRef` |
+| Azure deploy credentials | **None exist** | Short-lived OIDC token per workflow run |
+| Registry credentials | **None exist** | Managed identity with `AcrPull` |
 
-Rules this setup enforces:
+Rules this enforces:
 
-- **No long-lived cloud key exists.** Workload Identity Federation mints a token per workflow run,
-  scoped by an attribute condition to this repository only. There is no JSON key to leak or rotate.
+- **No long-lived Azure credential exists.** Federation mints a token per run, scoped by subject to
+  this repository. Nothing to leak or rotate.
 - **No secret is in Git.** `.gitignore` excludes `.env`; only `.env.example` with placeholders is
-  tracked. Verify with `git log -p | grep -i mongodb+srv` — it should return nothing.
-- **Least privilege.** The runtime account can read exactly one secret. The deployer can push
-  images and deploy, nothing else.
-- **Rotation:** `gcloud secrets versions add roxstar-mongodb-uri --data-file=-` then redeploy.
-  The service references `:latest`, so the next revision picks it up.
+  tracked. `infrastructure/containerapp.yaml` is a template whose `__MONGODB_URI__` placeholder is
+  filled at render time.
+- **Least privilege.** The pull identity holds `AcrPull` on one registry. The deployer holds
+  `AcrPush` on that registry and `Container Apps Contributor` on **the single app resource** — not the
+  resource group, not the subscription.
+- **Rotation:**
+  ```bash
+  az containerapp secret set --name roxstar-backend \
+    --resource-group roxstar-backend-rg --secrets mongodb-uri=<new-value>
+  az containerapp revision restart --name roxstar-backend \
+    --resource-group roxstar-backend-rg --revision <current>
+  ```
 
 ---
 
 ## 4. Deploying
 
-Normal path: **merge to `main`**. `deploy.yml` runs CI first (`workflow_call`), and deploys only
-if it passes.
+Normal path: **merge to `main`**. `deploy.yml` runs CI first (`workflow_call`) and deploys only if it
+passes.
 
 ```
 push to main
-  └─ verify (CI: typecheck → lint → unit → integration w/ MongoDB → build)
+  └─ verify (CI: typecheck → lint → unit → integration w/ MongoDB → build → audit)
        └─ deploy
-            ├─ record currently serving revision      ← rollback target
-            ├─ build image, tag :<sha> and :latest
-            ├─ push to Artifact Registry
-            ├─ gcloud run deploy
-            ├─ smoke test the live URL
-            └─ roll back automatically if the smoke test fails
+            ├─ azure/login@v2 (OIDC, no secret)
+            ├─ record currently deployed image        ← rollback target
+            ├─ build + push  :<commit-sha>  and  :latest
+            ├─ az containerapp update --image :<sha>
+            ├─ assert replicas are still 1/1 and mode is Single
+            ├─ poll /ready until the new revision serves
+            ├─ smoke test (/health, /ready, WebSocket upgrade)
+            └─ on any failure → restore the previous image
 ```
 
-Manual deploy: **Actions → Deploy to Cloud Run → Run workflow**.
+Manual deploy: **Actions → Deploy to Azure Container Apps → Run workflow**.
 
 ### Production environment variables
 
 | Variable | Value | Source |
 |---|---|---|
-| `NODE_ENV` | `production` | `--set-env-vars` |
-| `PORT` | `8080` | **Injected by Cloud Run** — never set manually |
-| `MONGODB_URI` | Atlas SRV string | `--set-secrets` from Secret Manager |
-| `LOG_LEVEL` | `info` | `--set-env-vars` |
-| `SPIN_ELIMINATION_INTERVAL_MS` | `5000` | `--set-env-vars` |
+| `NODE_ENV` | `production` | Container App env var |
+| `PORT` | `3000` | **Set explicitly** — see below |
+| `MONGODB_URI` | Atlas SRV string | Container Apps secret `mongodb-uri` |
+| `LOG_LEVEL` | `info` | Container App env var |
+| `SPIN_ELIMINATION_INTERVAL_MS` | `5000` | Container App env var |
 
-Configuration is validated by Zod at startup: a missing or malformed variable aborts the process
-with a message naming every offender, so a misconfigured revision fails fast and never serves
-traffic.
+> **`PORT` is not injected by Azure.** Unlike Cloud Run, Container Apps does not set `PORT`; the
+> platform routes to whatever `targetPort` says. `PORT=3000` and `targetPort: 3000` must agree, and
+> both are set in `infrastructure/containerapp.yaml`. Changing one without the other breaks ingress.
+
+Configuration is validated by Zod at startup, so a missing or malformed variable aborts the process
+with a message naming every offender — the revision then fails its startup probe and never serves.
 
 ---
 
 ## 5. Health and readiness verification
 
-The two endpoints are deliberately different and map to different probes:
-
 | Endpoint | Meaning | Probe | On failure |
 |---|---|---|---|
 | `/health` | Process liveness. **Never queries MongoDB** | Liveness | Restart the container |
-| `/ready` | Can serve traffic — requires a live database | Startup / readiness | Stop routing traffic; keep the process |
+| `/ready` | Can serve traffic — requires a live database | Startup + Readiness | Stop routing traffic; keep the process |
 
-Cloud Run uses the startup probe on `/ready`, so a revision receives traffic only once it has
-actually connected to Atlas.
-
-### Verifying a deployment
+The startup probe gates the revision on `/ready`, so a revision receives traffic only after it has
+connected to Atlas and `recoverSpins()` has run.
 
 ```bash
-URL=$(gcloud run services describe roxstar-backend --region asia-south1 --format='value(status.url)')
+RG=roxstar-backend-rg
+URL="https://$(az containerapp show -n roxstar-backend -g $RG \
+  --query properties.configuration.ingress.fqdn -o tsv)"
 
 curl -sS "$URL/health"   # {"status":"ok",...}
 curl -sS "$URL/ready"    # {"status":"ready","database":"connected",...}
 
-# Full gate, including a real WebSocket upgrade through the ingress
 cd backend && npm ci && node scripts/smoke.mjs "$URL"
 ```
 
 The smoke test asserts liveness, database readiness, the 404 envelope, that anonymous sockets are
-rejected (which itself proves the WebSocket upgrade completed), and that an authenticated socket
-connects. Set `SMOKE_SKIP_WRITE=1` to skip the step that creates a throwaway user.
+rejected (which proves the WebSocket upgrade completed), and that an authenticated socket connects.
+`SMOKE_SKIP_WRITE=1` skips the step that creates a throwaway user.
 
-### Inspecting a running service
+### Inspecting a running app
 
 ```bash
-gcloud run services describe roxstar-backend --region asia-south1
-gcloud run revisions list --service roxstar-backend --region asia-south1
-gcloud run services logs read roxstar-backend --region asia-south1 --limit 100
+az containerapp show     -n roxstar-backend -g $RG -o yaml
+az containerapp revision list -n roxstar-backend -g $RG -o table
+az containerapp logs show     -n roxstar-backend -g $RG --follow
 ```
 
 ---
 
 ## 6. Rollback
 
-Cloud Run revisions are immutable, so rollback is a traffic switch — seconds, no rebuild.
+Images are immutable and commit-addressed, so rollback restores a known-good image:
 
 ```bash
-# 1. Find the last known-good revision
-gcloud run revisions list --service roxstar-backend --region asia-south1
+# 1. Find the last known-good tag (or read it from the failed run's summary)
+az acr repository show-tags --name <acr> --repository roxstar-backend --orderby time_desc -o table
 
-# 2. Send all traffic back to it
-gcloud run services update-traffic roxstar-backend \
-  --region asia-south1 \
-  --to-revisions roxstar-backend-<good-sha>=100
+# 2. Restore it
+az containerapp update -n roxstar-backend -g roxstar-backend-rg \
+  --image <acr>.azurecr.io/roxstar-backend:<good-sha>
 
 # 3. Confirm
 curl -sS "$URL/health" && curl -sS "$URL/ready"
 cd backend && node scripts/smoke.mjs "$URL"
 ```
 
-The deploy workflow performs exactly this automatically when the smoke test fails, using the
-revision it recorded before deploying. The faulty revision is left in place (with no traffic) so it
-can be inspected.
+The workflow performs exactly this automatically when readiness polling or the smoke test fails,
+using the image tag recorded before the deploy. The failed image stays in the registry for inspection.
 
-### Alternative: redeploy a known-good image
-
-```bash
-gcloud run deploy roxstar-backend \
-  --image asia-south1-docker.pkg.dev/roxstar-backend/roxstar/roxstar-backend:<good-sha> \
-  --region asia-south1
-```
+**Traffic splitting is deliberately not used.** It would require multi-revision mode, which runs two
+revisions at once and contradicts the single-replica requirement.
 
 ### When rollback is *not* enough
 
-Traffic switching reverts **code, not data**. The schema is additive-only (Phase 2 and Phase 4 added
-fields with defaults and never removed or retyped one), so an older revision reads newer documents
-safely. A future change that removes or retypes a field would need a forward fix instead — roll
-forward, do not roll back.
+Restoring an image reverts **code, not data**. The schema is additive-only (Phases 2 and 4 added
+fields with defaults and never removed or retyped one), so an older image reads newer documents
+safely. A change that removes or retypes a field would need a forward fix instead.
 
-An in-flight spin survives either direction: the new instance runs `recoverSpins()` at startup,
-which derives outstanding eliminations from persisted state. Connected clients reconnect and receive
-a fresh `room_state`.
+An in-flight spin survives either direction: the new revision runs `recoverSpins()` at startup, which
+derives outstanding eliminations from persisted state. Connected clients reconnect and receive a fresh
+`room_state`.
 
 ---
 
@@ -222,29 +245,29 @@ a fresh `room_state`.
 
 | Concern | Handling |
 |---|---|
-| Upgrade support | Native on Cloud Run over HTTPS → `wss://` |
-| Connection lifetime | `--timeout 3600` (the default would cut long-lived sockets) |
-| Instance count | `--max-instances 1` — required by in-process state |
-| Cold starts dropping sockets | `--min-instances 1`; `recoverSpins()` covers restarts regardless |
-| Polling-transport stickiness | `--session-affinity` enabled |
-| Scaling adapter | None needed at one instance; Redis is explicitly out of scope |
-
-Client connection is identical to local, with `wss://`:
+| Upgrade support | Native on Container Apps over HTTPS → `wss://` |
+| Transport | `transport: auto` negotiates HTTP/1.1, which the upgrade needs |
+| Replica count | `maxReplicas: 1` — required by in-process state, asserted on every deploy |
+| Ingress idle timeout | Socket.IO's ~25 s heartbeat keeps connections non-idle. **Verify with a long-held connection on first deploy** |
+| Sticky sessions | `affinity: sticky` — redundant at one replica, harmless and correct if that ever changes |
+| Scaling adapter | None needed at one replica; Redis is explicitly out of scope |
 
 ```js
-const socket = io('https://roxstar-backend-xxxx.a.run.app', { auth: { userId } });
+const socket = io('https://<app>.<region>.azurecontainerapps.io', { auth: { userId } });
 ```
 
 ---
 
 ## 8. Known limitations
 
-- **Single instance.** Horizontal scaling requires the Socket.IO Redis adapter and a shared
-  scheduler. Out of scope, and documented above.
-- **Atlas allows all IPs.** A VPC connector with Cloud NAT is the production answer; credentials
-  plus TLS are the boundary here.
+- **Single replica.** Scaling out needs the Socket.IO Redis adapter and a shared scheduler.
+- **Brief revision overlap.** During a deploy, Container Apps may run the old and new revisions
+  momentarily. Two schedulers could therefore tick the same spin for a few seconds. The database
+  invariants are the backstop — conditional `status:'ACTIVE'` updates, unique elimination order,
+  unique event sequence and CAS completion mean no participant can be eliminated twice and no winner
+  announced twice. Bounded and safe, but worth knowing.
+- **Atlas allows all IPs.** VNet integration with a NAT gateway is the production answer.
 - **Identity is a demo stand-in.** `X-User-Id` is not authentication. It is isolated in
-  `middleware/currentUser.ts` and the socket handshake so a real mechanism could replace it without
-  touching any service.
-- **`min-instances=1` is not free-tier.** Roughly USD 5–10/month for the smallest configuration.
-  Setting it to `0` removes that cost at the price of cold starts dropping live sockets.
+  `middleware/currentUser.ts` and the socket handshake so a real mechanism could replace it.
+- **`minReplicas: 1` means always-on billing** beyond the Container Apps free grant. Setting `0`
+  removes the cost but drops live WebSocket connections and idles the spin scheduler.

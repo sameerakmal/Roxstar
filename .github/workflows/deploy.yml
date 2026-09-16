@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run
+name: Deploy to Azure Container Apps
 
 # A release only ever comes from a green build: the verify job below is the CI
 # workflow itself, and deploy depends on it.
@@ -9,18 +9,16 @@ on:
 
 permissions:
   contents: read
-  # Required for Workload Identity Federation — GitHub mints a short-lived OIDC token
-  # and GCP exchanges it. No long-lived service-account key exists anywhere.
+  # Required for OIDC — GitHub mints a short-lived token that Entra exchanges for an
+  # Azure access token. No Azure client secret exists anywhere.
   id-token: write
 
 env:
-  # Overridable per-environment via repository variables; defaults match the project
-  # this was built for.
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'roxstar-backend' }}
-  GCP_REGION: ${{ vars.GCP_REGION || 'asia-south1' }}
-  ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'roxstar' }}
-  SERVICE_NAME: ${{ vars.SERVICE_NAME || 'roxstar-backend' }}
-  SECRET_NAME: ${{ vars.MONGODB_SECRET_NAME || 'roxstar-mongodb-uri' }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'roxstar-backend-rg' }}
+  AZURE_REGION: ${{ vars.AZURE_REGION || 'centralindia' }}
+  CONTAINERAPP_NAME: ${{ vars.CONTAINERAPP_NAME || 'roxstar-backend' }}
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  IMAGE_NAME: roxstar-backend
 
 jobs:
   verify:
@@ -31,112 +29,157 @@ jobs:
     name: Build, push and deploy
     needs: verify
     runs-on: ubuntu-latest
+    # The federated credential for this job carries the subject
+    # repo:<org>/<repo>:environment:production — the setup script registers it.
     environment: production
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v2
+      - name: Fail fast if the registry is not configured
+        run: |
+          if [[ -z "${ACR_NAME}" ]]; then
+            echo "Repository variable ACR_NAME is not set. Registry names are globally"
+            echo "unique, so there is no safe default. See docs/deployment.md."
+            exit 1
+          fi
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set up the gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve registry
+        id: registry
+        run: |
+          LOGIN_SERVER=$(az acr show --name "${ACR_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" --query loginServer -o tsv)
+          echo "login_server=${LOGIN_SERVER}" >> "$GITHUB_OUTPUT"
+          echo "image=${LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
-      # Captured BEFORE the deploy so the rollback step has somewhere to go back to.
-      - name: Record the currently serving revision
+      # Captured BEFORE the deploy so rollback has a concrete target. Empty on the very
+      # first deploy, when the app still runs the bootstrap image.
+      - name: Record the currently deployed image
         id: current
         run: |
-          REVISION=$(gcloud run services describe "$SERVICE_NAME" \
-            --region "$GCP_REGION" \
-            --format='value(status.traffic[0].revisionName)' 2>/dev/null || echo "")
-          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
-          echo "Currently serving: ${REVISION:-<none, first deploy>}"
+          PREVIOUS=$(az containerapp show --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || echo "")
+          echo "image=${PREVIOUS}" >> "$GITHUB_OUTPUT"
+          echo "Currently deployed: ${PREVIOUS:-<none>}"
 
       - name: Build and push the image
-        id: image
         run: |
-          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${SERVICE_NAME}"
-          # Tagged with the commit SHA for traceability, plus latest for convenience.
+          az acr login --name "${ACR_NAME}"
+          # Immutable, commit-addressed tag plus a moving latest for convenience.
           docker build --build-arg GIT_SHA="${GITHUB_SHA}" \
-            -t "${IMAGE}:${GITHUB_SHA}" \
-            -t "${IMAGE}:latest" \
+            -t "${{ steps.registry.outputs.image }}" \
+            -t "${{ steps.registry.outputs.login_server }}/${IMAGE_NAME}:latest" \
             ./backend
-          docker push "${IMAGE}:${GITHUB_SHA}"
-          docker push "${IMAGE}:latest"
-          echo "ref=${IMAGE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          docker push "${{ steps.registry.outputs.image }}"
+          docker push "${{ steps.registry.outputs.login_server }}/${IMAGE_NAME}:latest"
 
-      # max-instances=1 is a hard requirement, not tuning: presence tracking, spin
-      # timers and the per-room mutex are in-process, so a second instance would split
-      # that state. session-affinity and the long timeout keep WebSockets stable.
-      - name: Deploy to Cloud Run
+      # Only the image changes. Ingress, probes, secrets and the replica pinning come
+      # from the spec applied at setup time and are preserved by an image-only update.
+      - name: Deploy to Container Apps
         run: |
-          gcloud run deploy "$SERVICE_NAME" \
-            --image "${{ steps.image.outputs.ref }}" \
-            --region "$GCP_REGION" \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8080 \
-            --min-instances 1 \
-            --max-instances 1 \
-            --session-affinity \
-            --timeout 3600 \
-            --cpu 1 --memory 512Mi \
-            --set-env-vars "NODE_ENV=production,LOG_LEVEL=info,SPIN_ELIMINATION_INTERVAL_MS=5000" \
-            --set-secrets "MONGODB_URI=${SECRET_NAME}:latest" \
-            --revision-suffix "${GITHUB_SHA::7}" \
-            --quiet
+          az containerapp update \
+            --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${{ steps.registry.outputs.image }}" \
+            --output none
+
+      # The single-replica rule is a correctness requirement, so it is asserted rather
+      # than assumed: in-process presence, spin timers and the room mutex cannot be
+      # split across replicas.
+      - name: Verify the replica configuration is still 1/1
+        run: |
+          MIN=$(az containerapp show --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "properties.template.scale.minReplicas" -o tsv)
+          MAX=$(az containerapp show --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "properties.template.scale.maxReplicas" -o tsv)
+          MODE=$(az containerapp show --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "properties.configuration.activeRevisionsMode" -o tsv)
+          echo "minReplicas=${MIN} maxReplicas=${MAX} revisionsMode=${MODE}"
+
+          if [[ "${MIN}" != "1" || "${MAX}" != "1" ]]; then
+            echo "::error::Replica configuration is ${MIN}/${MAX}, expected 1/1."
+            exit 1
+          fi
+          if [[ "${MODE}" != "Single" ]]; then
+            echo "::error::Active revisions mode is ${MODE}, expected Single."
+            exit 1
+          fi
 
       - name: Resolve the service URL
         id: url
         run: |
-          URL=$(gcloud run services describe "$SERVICE_NAME" \
-            --region "$GCP_REGION" --format='value(status.url)')
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "Deployed to $URL"
+          FQDN=$(az containerapp show --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "url=https://${FQDN}" >> "$GITHUB_OUTPUT"
+          echo "Deployed to https://${FQDN}"
+
+      # A new revision takes a little while to pass its startup probe; poll rather than
+      # sleeping a fixed amount.
+      - name: Wait for readiness
+        run: |
+          URL="${{ steps.url.outputs.url }}"
+          for attempt in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${URL}/ready" || echo "000")
+            if [[ "${CODE}" == "200" ]]; then
+              echo "Ready after ${attempt} attempt(s)."
+              exit 0
+            fi
+            echo "  attempt ${attempt}: /ready returned ${CODE}"
+            sleep 10
+          done
+          echo "::error::Service did not become ready."
+          exit 1
 
       - name: Install smoke-test dependencies
         working-directory: backend
         run: npm ci
 
-      # The release gate: liveness, database readiness and a real WebSocket upgrade
-      # through the Cloud Run ingress.
+      # The release gate: liveness, database readiness through Atlas, and a real
+      # WebSocket upgrade through the Container Apps ingress.
       - name: Smoke test the deployment
         id: smoke
         working-directory: backend
         run: node scripts/smoke.mjs "${{ steps.url.outputs.url }}"
 
-      # Only reachable when the smoke test failed and a previous revision exists.
-      - name: Roll back to the previous revision
-        if: failure() && steps.current.outputs.revision != ''
+      # Reachable only when a step above failed and a previous image exists. The image
+      # is immutable in the registry, so this is a deterministic restore, not a rebuild.
+      - name: Roll back to the previous image
+        if: failure() && steps.current.outputs.image != ''
         run: |
-          echo "Smoke test failed — restoring ${{ steps.current.outputs.revision }}"
-          gcloud run services update-traffic "$SERVICE_NAME" \
-            --region "$GCP_REGION" \
-            --to-revisions "${{ steps.current.outputs.revision }}=100" \
-            --quiet
-          echo "Traffic restored. The bad revision remains for inspection."
+          echo "Deployment failed — restoring ${{ steps.current.outputs.image }}"
+          az containerapp update \
+            --name "${CONTAINERAPP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${{ steps.current.outputs.image }}" \
+            --output none
+          echo "Previous image restored. The failed image remains in the registry for inspection."
 
       - name: Deployment summary
         if: always()
         run: |
           {
-            echo "### Cloud Run deployment"
+            echo "### Azure Container Apps deployment"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Service | \`$SERVICE_NAME\` |"
-            echo "| Region | \`$GCP_REGION\` |"
-            echo "| Image | \`${{ steps.image.outputs.ref }}\` |"
+            echo "| App | \`${CONTAINERAPP_NAME}\` |"
+            echo "| Resource group | \`${AZURE_RESOURCE_GROUP}\` |"
+            echo "| Region | \`${AZURE_REGION}\` |"
+            echo "| Image | \`${{ steps.registry.outputs.image }}\` |"
             echo "| URL | ${{ steps.url.outputs.url }} |"
-            echo "| Previous revision | \`${{ steps.current.outputs.revision }}\` |"
+            echo "| Previous image | \`${{ steps.current.outputs.image }}\` |"
             echo "| Smoke test | ${{ steps.smoke.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

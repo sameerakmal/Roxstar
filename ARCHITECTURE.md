@@ -22,7 +22,7 @@ payment or wallet logic is implemented.
 | Node.js service | REST APIs, WebSocket gateway, room state, spin engine, validation, persistence, broadcasting | Node.js 22 + TypeScript, Express 5, Socket.IO |
 | Database | Users, rooms, memberships, drafts, spins, spin participants, spin events | MongoDB with Mongoose (see §9) |
 | Container image | Reproducible backend package | Docker |
-| Cloud host | Final hosted endpoint | Google Cloud Run (`asia-south1`) + MongoDB Atlas (see §8) |
+| Cloud host | Final hosted endpoint | Azure Container Apps (`centralindia`) + MongoDB Atlas (see §8) |
 
 ### 1.2 Topology
 
@@ -538,7 +538,7 @@ TASKS.md items SP-8 to SP-17:
 
 ## 8. Deployment architecture
 
-Provider: **Google Cloud Run** in `asia-south1`, with **MongoDB Atlas** as the managed database.
+Provider: **Azure Container Apps** in `centralindia`, with **MongoDB Atlas** as the managed database.
 
 ```
 push to main
@@ -549,33 +549,47 @@ GitHub Actions
       │  fail = stop, nothing is deployed
       ▼
   deploy (deploy.yml)
-      ├─ record the currently serving revision        ← rollback target
+      ├─ azure/login@v2 via OIDC federation (no client secret)
+      ├─ record the currently deployed image          ← rollback target
       ├─ build image, tag :<commit-sha> and :latest
-      ├─ push to Artifact Registry (asia-south1)
-      ├─ gcloud run deploy
-      ├─ smoke test: /health, /ready, real WebSocket upgrade
-      └─ smoke fails → shift traffic back automatically
+      ├─ push to Azure Container Registry (centralindia)
+      ├─ az containerapp update --image
+      ├─ assert replicas are still 1/1 and mode is Single
+      ├─ poll /ready, then smoke test incl. a real WebSocket upgrade
+      └─ any failure → restore the previous image automatically
       ▼
-Cloud Run service (roxstar-backend)
-      ├─ min-instances=1, max-instances=1   ← in-process state, see below
-      ├─ session affinity, request timeout 3600s (WebSockets)
-      ├─ PORT injected (8080); MONGODB_URI from Secret Manager
-      └─ startup probe /ready · liveness probe /health
+Azure Container App (roxstar-backend, resource group roxstar-backend-rg)
+      ├─ minReplicas=1, maxReplicas=1        ← in-process state, see below
+      ├─ single revision mode, sticky sessions, transport auto (WebSockets)
+      ├─ PORT=3000 set explicitly; targetPort=3000
+      ├─ MONGODB_URI from a Container Apps secret
+      ├─ image pulled with a user-assigned managed identity (AcrPull)
+      └─ startup + readiness probe /ready · liveness probe /health
       │
       ▼ TLS (mongodb+srv)
 MongoDB Atlas (managed, M0)
 ```
 
-**Exactly one instance is a correctness requirement, not tuning.** Presence tracking
+**Exactly one replica is a correctness requirement, not tuning.** Presence tracking
 (`presenceRegistry`), spin timers (`spinScheduler`) and the per-room mutex (`roomMutex`) are all
-in-process. A second instance would split that state — two schedulers could drive one spin. The
+in-process. A second replica would split that state — two schedulers could drive one spin. The
 database invariants in §3.3 would still hold, but the in-memory coordination would need replacing
-with a shared adapter, which is out of scope.
+with a shared adapter, which is out of scope. The deploy workflow asserts the 1/1 pinning after every
+deployment rather than assuming it.
 
-Authentication to GCP uses **Workload Identity Federation**: GitHub mints a short-lived OIDC token
-per run, scoped by attribute condition to this repository. No long-lived service-account key exists.
+One consequence is recorded honestly: during a deploy Container Apps may run the old and new revision
+momentarily, so two schedulers can briefly overlap. The §3.3 invariants — conditional
+`status:'ACTIVE'` updates, unique elimination order, unique event sequence and CAS completion — mean
+no participant is eliminated twice and no winner announced twice, so the overlap is bounded and safe.
+Multi-revision traffic splitting is deliberately not used for the same reason.
 
-Rollback is a traffic switch between immutable revisions, not a rebuild — see
+Authentication to Azure uses **GitHub OIDC federation**: GitHub mints a short-lived token per run,
+bound by subject to this repository. No Azure client secret exists. Image pulls use a user-assigned
+managed identity holding `AcrPull`, so no registry password exists either.
+
+`PORT` is **not** injected by Container Apps, so it is set explicitly and must match `targetPort`.
+
+Rollback restores a previous immutable image tag, not a rebuild — see
 [docs/deployment.md](docs/deployment.md) for the runbook.
 
 Environment-based configuration and documented secrets handling are required by Section E; no
@@ -607,9 +621,9 @@ the engine. Multi-document atomicity, where required, needs an explicit transact
 
 | Decision | Choice | Justification |
 |---|---|---|
-| Cloud provider | **Google Cloud Run** (`asia-south1`) | Native WebSocket support, runs the existing Dockerfile unchanged, managed TLS, immutable revisions so rollback is a traffic switch, and Secret Manager integration. AWS App Runner lacks dependable WebSocket support; ECS+ALB and Kubernetes add infrastructure for no rubric gain |
+| Cloud provider | **Azure Container Apps** (`centralindia`) | Native WebSocket support, runs the existing Dockerfile unchanged, managed TLS, HTTP probes for `/health` and `/ready`, built-in secrets, and OIDC federation plus managed-identity pulls that remove every long-lived credential. Kubernetes adds infrastructure for no rubric gain |
 | Production database | **MongoDB Atlas** (managed) | The development compose MongoDB is not suitable for production; Atlas gives managed backups and TLS with no new infrastructure |
-| CI/CD | **GitHub Actions** | Already where the repository lives; Workload Identity Federation removes long-lived cloud keys |
+| CI/CD | **GitHub Actions** | Already where the repository lives; OIDC federation removes long-lived cloud keys |
 
 ### 9.3 Still open
 
