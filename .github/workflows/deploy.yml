@@ -71,16 +71,17 @@ jobs:
           echo "image=${PREVIOUS}" >> "$GITHUB_OUTPUT"
           echo "Currently deployed: ${PREVIOUS:-<none>}"
 
-      - name: Build and push the image
+      # Built once, tagged twice locally. Only the immutable commit-addressed tag is
+      # pushed here; :latest is held back until every deployment gate has passed so a
+      # failed build can never end up behind it.
+      - name: Build and push the immutable image
         run: |
           az acr login --name "${ACR_NAME}"
-          # Immutable, commit-addressed tag plus a moving latest for convenience.
           docker build --build-arg GIT_SHA="${GITHUB_SHA}" \
             -t "${{ steps.registry.outputs.image }}" \
             -t "${{ steps.registry.outputs.login_server }}/${IMAGE_NAME}:latest" \
             ./backend
           docker push "${{ steps.registry.outputs.image }}"
-          docker push "${{ steps.registry.outputs.login_server }}/${IMAGE_NAME}:latest"
 
       # Only the image changes. Ingress, probes, secrets and the replica pinning come
       # from the spec applied at setup time and are preserved by an image-only update.
@@ -126,6 +127,12 @@ jobs:
           echo "url=https://${FQDN}" >> "$GITHUB_OUTPUT"
           echo "Deployed to https://${FQDN}"
 
+      # Installed before the deploy because both the success gate and the rollback
+      # verification run the smoke test.
+      - name: Install smoke-test dependencies
+        working-directory: backend
+        run: npm ci
+
       # A new revision takes a little while to pass its startup probe; poll rather than
       # sleeping a fixed amount.
       - name: Wait for readiness
@@ -143,10 +150,6 @@ jobs:
           echo "::error::Service did not become ready."
           exit 1
 
-      - name: Install smoke-test dependencies
-        working-directory: backend
-        run: npm ci
-
       # The release gate: liveness, database readiness through Atlas, and a real
       # WebSocket upgrade through the Container Apps ingress.
       - name: Smoke test the deployment
@@ -154,18 +157,111 @@ jobs:
         working-directory: backend
         run: node scripts/smoke.mjs "${{ steps.url.outputs.url }}"
 
+      # Every gate above passed, so this build is now the one :latest should name.
+      # The image was already built and tagged locally; this pushes that tag without
+      # rebuilding.
+      - name: Promote :latest
+        if: success()
+        run: |
+          docker push "${{ steps.registry.outputs.login_server }}/${IMAGE_NAME}:latest"
+          echo "Promoted ${IMAGE_NAME}:latest -> ${GITHUB_SHA}"
+
       # Reachable only when a step above failed and a previous image exists. The image
       # is immutable in the registry, so this is a deterministic restore, not a rebuild.
-      - name: Roll back to the previous image
+      #
+      # Restoring is not the same as recovering: the rollback is verified with the same
+      # gates the deployment had to pass, and the workflow fails loudly if the restored
+      # revision is not actually serving. Four outcomes are distinguishable in the log:
+      #   DEPLOYMENT FAILED          the new image did not pass its gates
+      #   ROLLBACK ATTEMPTED         the restore command was issued
+      #   ROLLBACK VERIFICATION FAILED  the restore did not bring the app back
+      #   ROLLBACK VERIFIED          the previous image is confirmed serving
+      - name: Roll back to the previous image and verify it
+        id: rollback
         if: failure() && steps.current.outputs.image != ''
         run: |
-          echo "Deployment failed — restoring ${{ steps.current.outputs.image }}"
-          az containerapp update \
+          set -uo pipefail
+          PREVIOUS="${{ steps.current.outputs.image }}"
+          URL="${{ steps.url.outputs.url }}"
+
+          echo "::error::DEPLOYMENT FAILED — the new image did not pass its gates."
+          echo "ROLLBACK ATTEMPTED: restoring ${PREVIOUS}"
+
+          if ! az containerapp update \
             --name "${CONTAINERAPP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --image "${{ steps.current.outputs.image }}" \
-            --output none
-          echo "Previous image restored. The failed image remains in the registry for inspection."
+            --image "${PREVIOUS}" \
+            --output none; then
+            echo "::error::ROLLBACK VERIFICATION FAILED — the restore command itself failed."
+            echo "status=restore-command-failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # 1. The platform must report the active revision healthy.
+          echo "Waiting for the restored revision to report healthy..."
+          REVISION_OK=false
+          for attempt in $(seq 1 30); do
+            STATE=$(az containerapp revision list \
+              --name "${CONTAINERAPP_NAME}" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --query "[?properties.active].properties.healthState | [0]" -o tsv 2>/dev/null || echo "")
+            if [[ "${STATE}" == "Healthy" ]]; then
+              echo "  active revision healthy after ${attempt} attempt(s)."
+              REVISION_OK=true
+              break
+            fi
+            echo "  attempt ${attempt}: revision healthState=${STATE:-unknown}"
+            sleep 10
+          done
+
+          if [[ "${REVISION_OK}" != "true" ]]; then
+            echo "::error::ROLLBACK VERIFICATION FAILED — restored revision never became healthy."
+            echo "status=revision-unhealthy" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # 2. Liveness must answer.
+          HEALTH=000
+          for attempt in $(seq 1 30); do
+            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${URL}/health" || echo "000")
+            [[ "${HEALTH}" == "200" ]] && break
+            echo "  attempt ${attempt}: /health returned ${HEALTH}"
+            sleep 10
+          done
+          if [[ "${HEALTH}" != "200" ]]; then
+            echo "::error::ROLLBACK VERIFICATION FAILED — /health returned ${HEALTH}, expected 200."
+            echo "status=health-failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "  /health 200"
+
+          # 3. Readiness must answer, which also proves MongoDB Atlas is reachable.
+          READY=000
+          for attempt in $(seq 1 30); do
+            READY=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${URL}/ready" || echo "000")
+            [[ "${READY}" == "200" ]] && break
+            echo "  attempt ${attempt}: /ready returned ${READY}"
+            sleep 10
+          done
+          if [[ "${READY}" != "200" ]]; then
+            echo "::error::ROLLBACK VERIFICATION FAILED — /ready returned ${READY}, expected 200."
+            echo "status=ready-failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "  /ready 200"
+
+          # 4. Read-only smoke test: same gate as the deployment, minus the write that
+          # would add a throwaway user to production during an incident.
+          if ! SMOKE_SKIP_WRITE=1 node backend/scripts/smoke.mjs "${URL}"; then
+            echo "::error::ROLLBACK VERIFICATION FAILED — read-only smoke test failed."
+            echo "status=smoke-failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "status=verified" >> "$GITHUB_OUTPUT"
+          echo "ROLLBACK VERIFIED: ${PREVIOUS} is serving and healthy."
+          echo "The failed image remains in the registry for inspection."
+          echo "Note: :latest was not promoted, so it still names the last good build."
 
       - name: Deployment summary
         if: always()
@@ -182,4 +278,5 @@ jobs:
             echo "| URL | ${{ steps.url.outputs.url }} |"
             echo "| Previous image | \`${{ steps.current.outputs.image }}\` |"
             echo "| Smoke test | ${{ steps.smoke.outcome }} |"
+            echo "| Rollback | ${{ steps.rollback.outcome || 'not needed' }} (${{ steps.rollback.outputs.status || 'n/a' }}) |"
           } >> "$GITHUB_STEP_SUMMARY"
