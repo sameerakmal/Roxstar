@@ -20,6 +20,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,6 +98,7 @@ fun RecordingScreen(viewModel: RecordingViewModel = viewModel()) {
             }
         },
         onStopTap = viewModel::stopRecording,
+        onEffectSelected = viewModel::selectEffect,
         onOpenSettings = {
             activity.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
@@ -109,6 +113,7 @@ private fun RecordingScreenContent(
     uiState: RecordingUiState,
     onRecordTap: () -> Unit,
     onStopTap: () -> Unit,
+    onEffectSelected: (Effect) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -119,6 +124,12 @@ private fun RecordingScreenContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
+            )
+            EffectSelector(
+                selected = uiState.selectedEffect,
+                enabled = uiState.phase != RecordingPhase.RECORDING && uiState.phase != RecordingPhase.SAVING,
+                onSelect = onEffectSelected,
+                modifier = Modifier.padding(top = 20.dp),
             )
         }
 
@@ -152,6 +163,33 @@ private fun RecordingScreenContent(
             StatusMessage(uiState, onOpenSettings)
         }
     }
+}
+
+@Composable
+private fun EffectSelector(
+    selected: Effect,
+    enabled: Boolean,
+    onSelect: (Effect) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SingleChoiceSegmentedButtonRow(modifier = modifier.fillMaxWidth()) {
+        Effect.entries.forEachIndexed { index, effect ->
+            SegmentedButton(
+                selected = selected == effect,
+                onClick = { onSelect(effect) },
+                enabled = enabled,
+                shape = SegmentedButtonDefaults.itemShape(index, Effect.entries.size),
+                label = { Text(effectLabel(effect)) },
+            )
+        }
+    }
+}
+
+private fun effectLabel(effect: Effect) = when (effect) {
+    Effect.NONE -> "None"
+    Effect.ECHO -> "Echo"
+    Effect.REVERB -> "Reverb"
+    Effect.PITCH_SHIFT -> "Pitch"
 }
 
 @Composable

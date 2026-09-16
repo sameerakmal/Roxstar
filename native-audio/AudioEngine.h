@@ -11,6 +11,7 @@
 
 #include "RecordingSession.h"
 #include "Status.h"
+#include "src/effects/IEffect.h"
 
 namespace roxstar {
 
@@ -66,7 +67,10 @@ enum ConfigIndex : int32_t {
  * Phase 2 scope: open/start/stop/close and reporting the real stream config.
  * Phase 3 adds recording: onAudioReady() routes captured audio into a
  * RecordingSession (ring buffer + WAV writer thread) whenever recording is
- * active. Effects and playback remain out of scope.
+ * active. Phase 5 adds effects: onAudioReady() applies the selected effect
+ * (see RecordingSession::applyEffect) to the mono buffer before it reaches
+ * the ring buffer, so the saved WAV contains the processed signal. Playback
+ * remains out of scope.
  */
 class AudioEngine : public oboe::AudioStreamDataCallback,
                     public oboe::AudioStreamErrorCallback {
@@ -81,6 +85,14 @@ public:
     Status start();
     Status stop();
     Status close();
+
+    /**
+     * Selects the effect applied to the *next* recording. Fixed for that
+     * session once startRecording() begins — call this again before the
+     * next one to change it. Rejected with InvalidState while a recording is
+     * already in progress (changing effects mid-recording is not supported).
+     */
+    Status setEffect(effects::EffectType type);
 
     /**
      * Auto-opens/starts the stream if needed, then starts recording to

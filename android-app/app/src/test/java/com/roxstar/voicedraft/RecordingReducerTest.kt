@@ -6,6 +6,37 @@ import org.junit.Test
 
 class RecordingReducerTest {
 
+    // --- effectSelected ---
+
+    @Test
+    fun effectSelected_whileIdle_isApplied() {
+        val next = RecordingReducer.effectSelected(RecordingUiState(phase = RecordingPhase.IDLE), Effect.ECHO)
+        assertEquals(Effect.ECHO, next?.selectedEffect)
+    }
+
+    @Test
+    fun effectSelected_whileSaved_isApplied() {
+        val next = RecordingReducer.effectSelected(RecordingUiState(phase = RecordingPhase.SAVED), Effect.REVERB)
+        assertEquals(Effect.REVERB, next?.selectedEffect)
+    }
+
+    @Test
+    fun effectSelected_whileRecording_isIgnored() {
+        assertNull(RecordingReducer.effectSelected(RecordingUiState(phase = RecordingPhase.RECORDING), Effect.ECHO))
+    }
+
+    @Test
+    fun effectSelected_whileSaving_isIgnored() {
+        assertNull(RecordingReducer.effectSelected(RecordingUiState(phase = RecordingPhase.SAVING), Effect.ECHO))
+    }
+
+    @Test
+    fun startRequested_doesNotResetTheSelectedEffect() {
+        val previous = RecordingUiState(phase = RecordingPhase.IDLE, selectedEffect = Effect.PITCH_SHIFT)
+        val next = RecordingReducer.startRequested(previous)
+        assertEquals(Effect.PITCH_SHIFT, next?.selectedEffect)
+    }
+
     // --- permissionResult ---
 
     @Test

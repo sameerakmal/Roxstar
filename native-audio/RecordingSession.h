@@ -10,6 +10,7 @@
 #include "RingBuffer.h"
 #include "Status.h"
 #include "WavWriter.h"
+#include "src/effects/IEffect.h"
 
 namespace roxstar {
 
@@ -43,9 +44,18 @@ public:
     RecordingSession &operator=(const RecordingSession &) = delete;
 
     /**
-     * JNI thread. Opens the file, sizes the ring buffer and starts the writer
-     * thread. Output is always mono 16-bit PCM at `sampleRate` — the caller
-     * downmixes in pushSamples(), so this class never needs a channel count.
+     * JNI thread. Sets the effect applied for the *next* start() call. Fixed
+     * for that recording session — call this again before starting the next
+     * one to change it. Effect construction and buffer sizing happen inside
+     * start(), once the actual sample rate is known.
+     */
+    void setEffect(effects::EffectType type) { mEffectType = type; }
+
+    /**
+     * JNI thread. Opens the file, sizes the ring buffer, builds and prepares
+     * the selected effect, and starts the writer thread. Output is always
+     * mono 16-bit PCM at `sampleRate` — the caller downmixes in
+     * pushSamples(), so this class never needs a channel count.
      */
     Status start(const std::string &path, int32_t sampleRate);
 
@@ -54,6 +64,15 @@ public:
 
     /** JNI thread. Signals, drains, joins, then deletes the (incomplete) file. */
     void cancelAndDiscard();
+
+    /**
+     * AUDIO CALLBACK THREAD ONLY. No allocation, locking, logging or file I/O.
+     * Applies the effect selected for this session in place, if any — a no-op
+     * when the effect is None or when no recording is active. The object was
+     * fully constructed and prepared on the JNI thread inside start(), before
+     * mActive was published, so this only ever dereferences a ready effect.
+     */
+    void applyEffect(float *mono, int32_t numFrames);
 
     /**
      * AUDIO CALLBACK THREAD ONLY. No allocation, locking, logging or file I/O.
@@ -86,9 +105,12 @@ private:
     std::atomic<int32_t> mOverrunFrames{0};
 
     // Published (release) before mActive is set, so the audio thread's
-    // acquire load of mActive makes this safe to read without its own
-    // synchronization.
+    // acquire load of mActive makes these safe to read without their own
+    // synchronization. mEffect may be null (EffectType::None).
     std::unique_ptr<RingBuffer> mRingBuffer;
+    std::unique_ptr<effects::IEffect> mEffect;
+
+    effects::EffectType mEffectType = effects::EffectType::None;  // JNI thread only
 
     std::thread mWriterThread;
     WavFileWriter mWriter;

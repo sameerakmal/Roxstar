@@ -118,6 +118,14 @@ Status AudioEngine::stop() {
     return Status::Ok;
 }
 
+Status AudioEngine::setEffect(effects::EffectType type) {
+    if (mRecording.isRecording()) {
+        return Status::InvalidState;
+    }
+    mRecording.setEffect(type);
+    return Status::Ok;
+}
+
 Status AudioEngine::startRecording(const std::string &path) {
     std::lock_guard<std::mutex> guard(mLock);
 
@@ -260,10 +268,11 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
                                                    void *audioData,
                                                    int32_t numFrames) {
     // REAL-TIME THREAD. No allocation, locking, logging, file I/O or JNI here.
-    // One pass converts to float and downmixes to mono (support for the same
-    // two formats as Phase 2), tracking peak level; when recording is active
-    // the same mono samples are handed to the lock-free ring buffer in
-    // bounded chunks via a fixed-size stack scratch buffer.
+    // Per bounded chunk: downmix to mono (same two formats as Phase 2) ->
+    // apply the selected effect in place, if recording -> measure peak on
+    // the result -> push into the ring buffer. Peak is therefore measured
+    // post-effect while recording (what you see is what got saved) and on
+    // the raw input the rest of the time, when no effect is in the path.
     constexpr int32_t kScratchFrames = 2048;
 
     const int32_t channels = mCallbackChannels.load(std::memory_order_relaxed);
@@ -290,12 +299,19 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
                     isFloat ? floatSamples[base + c]
                             : static_cast<float>(i16Samples[base + c]) / kInt16Scale;
                 frameSum += sample;
-                const float magnitude = sample < 0.0f ? -sample : sample;
-                if (magnitude > peak) {
-                    peak = magnitude;
-                }
             }
             monoScratch[f] = channels > 0 ? frameSum / static_cast<float>(channels) : 0.0f;
+        }
+
+        if (recording) {
+            mRecording.applyEffect(monoScratch, chunk);
+        }
+
+        for (int32_t f = 0; f < chunk; ++f) {
+            const float magnitude = monoScratch[f] < 0.0f ? -monoScratch[f] : monoScratch[f];
+            if (magnitude > peak) {
+                peak = magnitude;
+            }
         }
 
         if (recording) {

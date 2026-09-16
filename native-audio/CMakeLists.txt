@@ -9,12 +9,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(oboe REQUIRED CONFIG)
 
 # Phase 3 adds the recording pipeline: ring buffer, WAV writer and the writer
-# thread that drains it. Effects and playback remain out of scope.
+# thread that drains it. Phase 5 adds the effects applied to that pipeline
+# (native-audio/src/effects/). Playback remains out of scope.
 add_library(native-audio SHARED
     jni_bridge.cpp
     AudioEngine.cpp
     RecordingSession.cpp
     WavWriter.cpp
+    src/effects/IEffect.cpp
+    src/effects/EchoEffect.cpp
+    src/effects/ReverbEffect.cpp
+    src/effects/PitchShiftEffect.cpp
 )
 
 target_include_directories(native-audio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

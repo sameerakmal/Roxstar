@@ -21,4 +21,11 @@ class AudioStatusMessageTest {
     fun openAndStartFailuresShareTheSameMicrophoneMessage() {
         assertEquals(AudioStatus.OPEN_FAILED.toUserMessage(), AudioStatus.START_FAILED.toUserMessage())
     }
+
+    @Test
+    fun invalidEffectHasItsOwnDistinctMessage() {
+        val message = AudioStatus.INVALID_EFFECT.toUserMessage()
+        assertNotEquals(message, AudioStatus.OPEN_FAILED.toUserMessage())
+        assertNotEquals(message, AudioStatus.FILE_ERROR.toUserMessage())
+    }
 }

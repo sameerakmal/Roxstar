@@ -27,7 +27,8 @@ enum class AudioStatus(val code: Int) {
     DISCONNECTED(-7),
     ALREADY_RECORDING(-8),
     NOT_RECORDING(-9),
-    FILE_ERROR(-10);
+    FILE_ERROR(-10),
+    INVALID_EFFECT(-11);
 
     companion object {
         fun from(code: Int): AudioStatus = entries.firstOrNull { it.code == code } ?: NO_ENGINE
@@ -45,6 +46,14 @@ enum class RecordingState(val code: Int) {
         fun from(code: Long): RecordingState =
             entries.firstOrNull { it.code == code.toInt() } ?: IDLE
     }
+}
+
+/** Mirrors roxstar::effects::EffectType in native-audio/src/effects/IEffect.h. */
+enum class Effect(val code: Int) {
+    NONE(0),
+    ECHO(1),
+    REVERB(2),
+    PITCH_SHIFT(3),
 }
 
 /** The configuration Oboe actually granted, read back from the open stream. */
@@ -91,6 +100,14 @@ class AudioEngine {
     fun stop(): AudioStatus = withHandle { AudioStatus.from(NativeAudioBridge.nativeStop(it)) }
 
     fun close(): AudioStatus = withHandle { AudioStatus.from(NativeAudioBridge.nativeClose(it)) }
+
+    /**
+     * Selects the effect for the *next* recording. Fixed for that session
+     * once it starts — call again before the next one to change it. Rejected
+     * with INVALID_STATE while a recording is already in progress.
+     */
+    fun setEffect(effect: Effect): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativeSetEffect(it, effect.code)) }
 
     /** [path] must be an absolute, already-unique path (e.g. filesDir/drafts/&lt;uuid&gt;.wav). */
     fun startRecording(path: String): AudioStatus =

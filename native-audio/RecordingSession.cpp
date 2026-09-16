@@ -35,6 +35,14 @@ Status RecordingSession::start(const std::string &path, int32_t sampleRate) {
         static_cast<size_t>(sampleRate * kRingBufferSeconds) + kWriterChunkFrames;
     mRingBuffer = std::make_unique<RingBuffer>(capacitySamples);
 
+    // Built fresh per session (rather than reused + reset()) so a new
+    // recording can never inherit stale state from a previous one, and so
+    // the effect selected here is the one that stays fixed for the session.
+    mEffect = effects::createEffect(mEffectType);
+    if (mEffect) {
+        mEffect->prepare(sampleRate);
+    }
+
     mFramesCaptured.store(0, std::memory_order_relaxed);
     mOverrunFrames.store(0, std::memory_order_relaxed);
     mStopRequested.store(false, std::memory_order_relaxed);
@@ -48,6 +56,14 @@ Status RecordingSession::start(const std::string &path, int32_t sampleRate) {
 
     mWriterThread = std::thread(&RecordingSession::writerLoop, this);
     return Status::Ok;
+}
+
+void RecordingSession::applyEffect(float *mono, int32_t numFrames) {
+    // REAL-TIME THREAD. No allocation, locking, logging or file I/O.
+    if (!mActive.load(std::memory_order_acquire) || !mEffect) {
+        return;
+    }
+    mEffect->process(mono, numFrames);
 }
 
 void RecordingSession::pushSamples(const float *mono, int32_t numFrames) {

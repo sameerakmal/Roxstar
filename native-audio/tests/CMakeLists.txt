@@ -15,8 +15,17 @@ add_executable(native_audio_tests
     test_ring_buffer.cpp
     test_wav_writer.cpp
     test_recording_session.cpp
+    test_effect_factory.cpp
+    test_echo_effect.cpp
+    test_reverb_effect.cpp
+    test_pitch_shift_effect.cpp
+    test_effects_integration.cpp
     ../WavWriter.cpp
     ../RecordingSession.cpp
+    ../src/effects/IEffect.cpp
+    ../src/effects/EchoEffect.cpp
+    ../src/effects/ReverbEffect.cpp
+    ../src/effects/PitchShiftEffect.cpp
 )
 
 target_link_libraries(native_audio_tests PRIVATE Threads::Threads)

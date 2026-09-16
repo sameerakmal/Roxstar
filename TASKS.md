@@ -45,8 +45,8 @@ Assessment sections A1 (10 pts) and A3 (20 pts). Pipeline mandated by the assess
 
 | # | Requirement | Implementation task | Test / demo evidence | Points |
 |---|---|---|---|---|
-| AA-5 | Implement at least one effect: Echo, Reverb or Pitch Shift, in the Oboe/native audio path where practical | Choose one effect (assessment requires only one) and implement it in native code on the captured buffer path so the effect sits between the Oboe input stream and the file writer | Demo checklist item 2: apply the effect and play the result; A/B the dry vs. processed clip | 10 (Working effect implementation) |
-| AA-6 | Sound audio processing and buffer design | Design the processing buffers explicitly: fixed frame sizes, no allocation/locking/logging inside the audio callback, documented delay-line or ring-buffer sizing for the chosen effect | Code walkthrough of the buffer design; document the buffer/latency choices in the audio-flow doc (feeds F: audio-flow diagram) | 5 (Audio processing and buffer design) |
+| [x] AA-5 | Implement at least one effect: Echo, Reverb or Pitch Shift, in the Oboe/native audio path where practical | Choose one effect (assessment requires only one) and implement it in native code on the captured buffer path so the effect sits between the Oboe input stream and the file writer | Demo checklist item 2: apply the effect and play the result; A/B the dry vs. processed clip | 10 (Working effect implementation) — exceeded: all three (Echo, Reverb, Pitch Shift) implemented, selectable before recording |
+| [x] AA-6 | Sound audio processing and buffer design | Design the processing buffers explicitly: fixed frame sizes, no allocation/locking/logging inside the audio callback, documented delay-line or ring-buffer sizing for the chosen effect | Code walkthrough of the buffer design; document the buffer/latency choices in the audio-flow doc (feeds F: audio-flow diagram) | 5 (Audio processing and buffer design) — see `docs/audio/effects.md` |
 | AA-7 | Stability across repeated operations and lifecycle changes | Make record/stop/record repeatable; handle Android lifecycle (background/foreground, rotation, app pause) and release streams deterministically; guard against double-start and double-stop | Test: repeat record→effect→save at least ~10 cycles plus a rotation and a background/foreground transition without crash, leak, or stuck stream. Show this in the demo | 5 (Stability across repeated operations and lifecycle changes) |
 
 ---
@@ -503,6 +503,28 @@ from it.
 deployment run (CI → OIDC login → image push → deploy → health/ready/smoke, all passed), and a live
 rollback-and-restore rehearsal against the running Container App.
 
-### Phase 6 — Android, Oboe audio and the documentation deliverables (not started)
+### Phase 6 — Android, Oboe audio and the documentation deliverables (in progress)
 
 AA-1..AA-7, DR-1..DR-6, and the Section F diagram/API deliverables.
+
+Progress so far, tracked as sub-phases under `android-app/` and `native-audio/`
+(not renumbered here to avoid clashing with the backend Phase 1-5 numbering above):
+
+- Android project foundation, Oboe input stream lifecycle, WAV recording pipeline
+  (ring buffer + writer thread), runtime permission handling and the Compose
+  recording UI — AA-1, AA-4 and the recording half of AA-2.
+- **Effects (AA-5, AA-6) — complete.** All three effects (Echo, Reverb, Pitch
+  Shift) implemented in `native-audio/src/effects/`, selectable via a
+  segmented control before recording, applied in the Oboe callback ahead of
+  the ring buffer so the saved WAV contains the processed audio. Host-side
+  C++ tests (53, run repeatedly) plus JVM contract/UI-state tests. Documented
+  in `docs/audio/effects.md`, including a real bug the test suite caught and
+  the fix. Real-time safety path explicitly reviewed: no allocation, mutex,
+  file I/O, JNI or logging inside the callback or any effect's `process()`.
+- **Not yet done:** playback of the saved file (rest of AA-2), a distinct
+  Cancel control (AA-3), the ~10-cycle + rotation/background stability sweep
+  (AA-7) beyond what the existing cancel/discard and reset-between-recordings
+  tests cover, DR-1..DR-6 (Drafts/backend integration), and the Section F
+  diagrams. On-device verification is also outstanding — no physical device
+  or emulator has been available for any Android phase so far; everything
+  above is build/unit/native-test verified only.

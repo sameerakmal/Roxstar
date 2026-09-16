@@ -34,6 +34,13 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { RecordingReducer.permissionResult(it, granted, canShowRationale, hasAskedBefore) }
     }
 
+    /** Ignored while recording or saving — the effect is fixed for an in-progress session. */
+    fun selectEffect(effect: Effect) {
+        val next = RecordingReducer.effectSelected(_uiState.value, effect) ?: return
+        _uiState.value = next
+        engine.setEffect(effect)  // sticky on the native side until changed again
+    }
+
     fun startRecording() {
         val next = RecordingReducer.startRequested(_uiState.value) ?: return
         _uiState.value = next

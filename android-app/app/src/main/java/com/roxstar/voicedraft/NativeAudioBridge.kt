@@ -55,4 +55,12 @@ object NativeAudioBridge {
 
     /** The path most recently used for recording, or "" if none yet. */
     external fun nativeGetLastRecordingPath(handle: Long): String
+
+    /**
+     * Selects the effect applied to the *next* recording (see [Effect]).
+     * Rejected with INVALID_STATE while a recording is in progress. An
+     * out-of-range [effectCode] fails safely with INVALID_EFFECT rather than
+     * being cast into undefined native enum territory.
+     */
+    external fun nativeSetEffect(handle: Long, effectCode: Int): Int
 }

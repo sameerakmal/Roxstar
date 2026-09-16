@@ -7,6 +7,7 @@ enum class RecordingPhase { IDLE, RECORDING, SAVING, SAVED, ERROR }
 data class RecordingUiState(
     val permission: PermissionState = PermissionState.UNKNOWN,
     val phase: RecordingPhase = RecordingPhase.IDLE,
+    val selectedEffect: Effect = Effect.NONE,
     val elapsedSeconds: Int = 0,
     val peakLevel: Float = 0f,
     val savedFileName: String? = null,
@@ -32,6 +33,14 @@ object RecordingReducer {
             else -> PermissionState.DENIED
         }
         return current.copy(permission = permission)
+    }
+
+    /** Null means the request is ignored — changing effects while recording is not supported. */
+    fun effectSelected(current: RecordingUiState, effect: Effect): RecordingUiState? {
+        if (current.phase == RecordingPhase.RECORDING || current.phase == RecordingPhase.SAVING) {
+            return null
+        }
+        return current.copy(selectedEffect = effect)
     }
 
     /** Null means the request is ignored (a recording is already in progress or saving). */
@@ -76,5 +85,6 @@ internal fun AudioStatus.toUserMessage(): String = when (this) {
         "Couldn't access the microphone. It may be in use by another app."
     AudioStatus.DISCONNECTED -> "The microphone was disconnected."
     AudioStatus.FILE_ERROR -> "Couldn't save the recording."
+    AudioStatus.INVALID_EFFECT -> "That effect isn't available. Please choose another."
     else -> "Something went wrong. Please try again."
 }

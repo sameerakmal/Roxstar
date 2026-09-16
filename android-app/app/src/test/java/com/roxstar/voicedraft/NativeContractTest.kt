@@ -7,8 +7,8 @@ import org.junit.Test
 
 /**
  * Guards the one contract the compiler cannot check: the numeric codes shared
- * across JNI (native-audio/Status.h, AudioEngine.h, RecordingSession.h) and
- * their Kotlin mirrors (AudioEngine.kt).
+ * across JNI (native-audio/Status.h, AudioEngine.h, RecordingSession.h,
+ * src/effects/IEffect.h) and their Kotlin mirrors (AudioEngine.kt).
  *
  * If either side is edited without the other, these assertions fail at build
  * time instead of producing a silently wrong state or status on a device.
@@ -18,6 +18,7 @@ class NativeContractTest {
     private val statusHeader by header("Status.h")
     private val audioEngineHeader by header("AudioEngine.h")
     private val recordingSessionHeader by header("RecordingSession.h")
+    private val effectHeader by header("src/effects/IEffect.h")
 
     @Test
     fun engineStateCodesMatchNativeHeader() {
@@ -55,6 +56,20 @@ class NativeContractTest {
             val nativeName = native.keys.first { screamingSnake(it) == kotlinEntry.name }
             assertEquals(
                 "RecordingState.${kotlinEntry.name} disagrees with native $nativeName",
+                native.getValue(nativeName),
+                kotlinEntry.code,
+            )
+        }
+    }
+
+    @Test
+    fun effectCodesMatchNativeHeader() {
+        val native = parseEnum(effectHeader, "EffectType")
+        assertEquals(Effect.entries.size, native.size)
+        Effect.entries.forEach { kotlinEntry ->
+            val nativeName = native.keys.first { screamingSnake(it) == kotlinEntry.name }
+            assertEquals(
+                "Effect.${kotlinEntry.name} disagrees with native $nativeName",
                 native.getValue(nativeName),
                 kotlinEntry.code,
             )

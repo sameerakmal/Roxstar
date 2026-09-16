@@ -20,6 +20,7 @@ enum class Status : int32_t {
     AlreadyRecording =  -8,
     NotRecording     =  -9,
     FileError        = -10,
+    InvalidEffect    = -11,
 };
 
 }  // namespace roxstar

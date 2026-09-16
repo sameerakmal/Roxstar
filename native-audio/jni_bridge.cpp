@@ -100,6 +100,24 @@ Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetConfig(JNIEnv *env,
     return out;
 }
 
+// effectCode is validated here, before it ever becomes a C++ enum value —
+// an out-of-range value fails safely with InvalidEffect rather than being
+// cast into undefined enum territory.
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeSetEffect(JNIEnv * /*env*/,
+                                                               jobject /* thiz */,
+                                                               jlong handle,
+                                                               jint effectCode) {
+    auto *engine = asEngine(handle);
+    if (engine == nullptr) {
+        return toJint(roxstar::Status::NoEngine);
+    }
+    if (!roxstar::effects::isValidEffectType(effectCode)) {
+        return toJint(roxstar::Status::InvalidEffect);
+    }
+    return toJint(engine->setEffect(static_cast<roxstar::effects::EffectType>(effectCode)));
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetLastResultText(JNIEnv *env,
                                                                       jobject /* thiz */,
