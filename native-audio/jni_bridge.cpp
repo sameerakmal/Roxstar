@@ -108,6 +108,45 @@ Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetLastResultText(JNIEnv *en
     return env->NewStringUTF(engine == nullptr ? "NoEngine" : engine->lastResultText());
 }
 
+// path is a full, unique, already-writable absolute path chosen by Kotlin
+// (filesDir/drafts/<uuid>.wav); native code just opens it.
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeStartRecording(JNIEnv *env,
+                                                                   jobject /* thiz */,
+                                                                   jlong handle,
+                                                                   jstring path) {
+    auto *engine = asEngine(handle);
+    if (engine == nullptr) {
+        return toJint(roxstar::Status::NoEngine);
+    }
+    const char *pathChars = env->GetStringUTFChars(path, nullptr);
+    if (pathChars == nullptr) {
+        return toJint(roxstar::Status::FileError);  // OutOfMemoryError is already pending.
+    }
+    const std::string pathStr(pathChars);
+    env->ReleaseStringUTFChars(path, pathChars);
+    return toJint(engine->startRecording(pathStr));
+}
+
+// Blocking: stops the Oboe stream, then signals/drains/joins the writer
+// thread and patches the WAV header. Callers must invoke this off the UI
+// thread (e.g. Dispatchers.IO), never from the audio callback.
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeStopRecording(JNIEnv * /*env*/,
+                                                                  jobject /* thiz */,
+                                                                  jlong handle) {
+    auto *engine = asEngine(handle);
+    return engine == nullptr ? toJint(roxstar::Status::NoEngine) : toJint(engine->stopRecording());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetLastRecordingPath(JNIEnv *env,
+                                                                         jobject /* thiz */,
+                                                                         jlong handle) {
+    auto *engine = asEngine(handle);
+    return env->NewStringUTF(engine == nullptr ? "" : engine->lastRecordingPath().c_str());
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetOboeVersion(JNIEnv *env,
                                                                    jobject /* thiz */) {

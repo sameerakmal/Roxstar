@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
+
+#include "RecordingSession.h"
+#include "Status.h"
 
 namespace roxstar {
 
@@ -18,18 +22,6 @@ enum class EngineState : int32_t {
     Stopped       = 3,
     Closed        = 4,
     Disconnected  = 5,  // Oboe reported a stream disconnect and closed the stream itself.
-};
-
-// Status codes returned across JNI. Mirrored by AudioStatus in AudioEngine.kt.
-enum class Status : int32_t {
-    Ok           =  0,
-    InvalidState = -1,
-    OpenFailed   = -2,
-    StartFailed  = -3,
-    StopFailed   = -4,
-    CloseFailed  = -5,
-    NoEngine     = -6,
-    Disconnected = -7,
 };
 
 // Layout of the snapshot array returned by the single coarse-grained config call.
@@ -50,6 +42,9 @@ enum ConfigIndex : int32_t {
     kIdxFramesRead,
     kIdxPeakLevelMicros,
     kIdxLastResult,
+    kIdxRecordingState,
+    kIdxRecordingFramesCaptured,
+    kIdxRecordingOverrunFrames,
     kIdxCount,
 };
 
@@ -69,8 +64,9 @@ enum ConfigIndex : int32_t {
  *    only publishes flags. The next lifecycle call performs the actual cleanup.
  *
  * Phase 2 scope: open/start/stop/close and reporting the real stream config.
- * Captured audio is intentionally discarded — the ring buffer, WAV writing and
- * effects arrive in later phases.
+ * Phase 3 adds recording: onAudioReady() routes captured audio into a
+ * RecordingSession (ring buffer + WAV writer thread) whenever recording is
+ * active. Effects and playback remain out of scope.
  */
 class AudioEngine : public oboe::AudioStreamDataCallback,
                     public oboe::AudioStreamErrorCallback {
@@ -85,6 +81,22 @@ public:
     Status start();
     Status stop();
     Status close();
+
+    /**
+     * Auto-opens/starts the stream if needed, then starts recording to
+     * `path` (already an absolute, unique path chosen by the caller).
+     * Fails with AlreadyRecording if a recording is already in progress.
+     */
+    Status startRecording(const std::string &path);
+
+    /**
+     * Stops the Oboe stream, then signals, drains and joins the writer
+     * thread, patches the WAV header and closes the file — in that order.
+     * Blocking; call off the UI thread.
+     */
+    Status stopRecording();
+
+    std::string lastRecordingPath() const { return mRecording.lastPath(); }
 
     /** Fills `out` with kIdxCount values describing the live stream. */
     void snapshot(int64_t *out, int32_t count);
@@ -102,6 +114,8 @@ public:
 
 private:
     oboe::Result openWithSharingMode(oboe::SharingMode sharingMode);
+    /** Opens with the Exclusive->Shared fallback. Caller must hold mLock. */
+    Status openStreamLocked();
     void releaseStreamLocked();
 
     mutable std::mutex mLock;
@@ -118,6 +132,10 @@ private:
     // Published under mLock before the stream can start; read by the audio callback.
     std::atomic<int32_t> mCallbackFormat{static_cast<int32_t>(oboe::AudioFormat::Invalid)};
     std::atomic<int32_t> mCallbackChannels{0};
+
+    // Owns its own synchronization; pushSamples() is real-time safe. Mutated
+    // (start/stop) only from the JNI thread, same as mStream.
+    RecordingSession mRecording;
 };
 
 }  // namespace roxstar

@@ -70,12 +70,16 @@ android {
     }
 }
 
-// NativeContractTest reads native-audio/AudioEngine.h to verify the C++/Kotlin
-// enum contract. Declaring it as an input stops Gradle from treating the test as
-// up-to-date when only the header changed — otherwise the guard silently skips.
+// NativeContractTest reads these native-audio/ headers to verify the C++/Kotlin
+// enum contract. Declaring them as inputs stops Gradle from treating the test as
+// up-to-date when only a header changed — otherwise the guard silently skips.
 tasks.withType<Test>().configureEach {
-    inputs.file(rootProject.file("../native-audio/AudioEngine.h"))
-        .withPropertyName("nativeAudioEngineHeader")
+    inputs.files(
+        rootProject.file("../native-audio/Status.h"),
+        rootProject.file("../native-audio/AudioEngine.h"),
+        rootProject.file("../native-audio/RecordingSession.h"),
+    )
+        .withPropertyName("nativeAudioContractHeaders")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

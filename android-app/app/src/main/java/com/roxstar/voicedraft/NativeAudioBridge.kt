@@ -40,4 +40,19 @@ object NativeAudioBridge {
 
     /** Oboe's own text for the last oboe::Result observed natively. */
     external fun nativeGetLastResultText(handle: Long): String
+
+    /**
+     * Auto-opens/starts the stream if needed, then starts recording to
+     * [path] (an absolute, already-unique path chosen by the caller).
+     */
+    external fun nativeStartRecording(handle: Long, path: String): Int
+
+    /**
+     * Blocking: stops the Oboe stream, then signals/drains/joins the writer
+     * thread and patches the WAV header. Call this off the main thread.
+     */
+    external fun nativeStopRecording(handle: Long): Int
+
+    /** The path most recently used for recording, or "" if none yet. */
+    external fun nativeGetLastRecordingPath(handle: Long): String
 }

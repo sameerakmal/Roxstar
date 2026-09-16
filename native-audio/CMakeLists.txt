@@ -8,11 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # AGP exposes it to CMake via android.buildFeatures.prefab = true.
 find_package(oboe REQUIRED CONFIG)
 
-# Phase 2: the JNI bridge plus the Oboe input-stream engine. Ring buffer, WAV
-# writing, effects and playback arrive in later phases.
+# Phase 3 adds the recording pipeline: ring buffer, WAV writer and the writer
+# thread that drains it. Effects and playback remain out of scope.
 add_library(native-audio SHARED
     jni_bridge.cpp
     AudioEngine.cpp
+    RecordingSession.cpp
+    WavWriter.cpp
 )
 
 target_include_directories(native-audio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

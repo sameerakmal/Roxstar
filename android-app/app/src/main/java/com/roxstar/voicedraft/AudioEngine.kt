@@ -15,7 +15,7 @@ enum class EngineState(val code: Int) {
     }
 }
 
-/** Mirrors roxstar::Status in native-audio/AudioEngine.h. */
+/** Mirrors roxstar::Status in native-audio/Status.h. */
 enum class AudioStatus(val code: Int) {
     OK(0),
     INVALID_STATE(-1),
@@ -24,10 +24,26 @@ enum class AudioStatus(val code: Int) {
     STOP_FAILED(-4),
     CLOSE_FAILED(-5),
     NO_ENGINE(-6),
-    DISCONNECTED(-7);
+    DISCONNECTED(-7),
+    ALREADY_RECORDING(-8),
+    NOT_RECORDING(-9),
+    FILE_ERROR(-10);
 
     companion object {
         fun from(code: Int): AudioStatus = entries.firstOrNull { it.code == code } ?: NO_ENGINE
+    }
+}
+
+/** Mirrors roxstar::RecordingState in native-audio/RecordingSession.h. */
+enum class RecordingState(val code: Int) {
+    IDLE(0),
+    RECORDING(1),
+    FINALIZING(2),
+    ERROR(3);
+
+    companion object {
+        fun from(code: Long): RecordingState =
+            entries.firstOrNull { it.code == code.toInt() } ?: IDLE
     }
 }
 
@@ -48,6 +64,9 @@ data class AudioConfig(
     val framesRead: Long,
     val peakLevel: Float,
     val lastResult: String,
+    val recordingState: RecordingState,
+    val recordingFramesCaptured: Long,
+    val recordingOverrunFrames: Int,
 )
 
 /**
@@ -72,6 +91,17 @@ class AudioEngine {
     fun stop(): AudioStatus = withHandle { AudioStatus.from(NativeAudioBridge.nativeStop(it)) }
 
     fun close(): AudioStatus = withHandle { AudioStatus.from(NativeAudioBridge.nativeClose(it)) }
+
+    /** [path] must be an absolute, already-unique path (e.g. filesDir/drafts/&lt;uuid&gt;.wav). */
+    fun startRecording(path: String): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativeStartRecording(it, path)) }
+
+    /** Blocking — call from a background dispatcher, never from the main thread. */
+    fun stopRecording(): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativeStopRecording(it)) }
+
+    fun lastRecordingPath(): String =
+        if (handle == 0L) "" else NativeAudioBridge.nativeGetLastRecordingPath(handle)
 
     fun release() {
         if (handle != 0L) {
@@ -100,6 +130,9 @@ class AudioEngine {
             framesRead = v[IDX_FRAMES_READ],
             peakLevel = v[IDX_PEAK_LEVEL_MICROS] / 1_000_000f,
             lastResult = NativeAudioBridge.nativeGetLastResultText(handle),
+            recordingState = RecordingState.from(v[IDX_RECORDING_STATE]),
+            recordingFramesCaptured = v[IDX_RECORDING_FRAMES_CAPTURED],
+            recordingOverrunFrames = v[IDX_RECORDING_OVERRUN_FRAMES].toInt(),
         )
     }
 
@@ -123,7 +156,10 @@ class AudioEngine {
         const val IDX_FRAMES_READ = 12
         const val IDX_PEAK_LEVEL_MICROS = 13
         const val IDX_LAST_RESULT = 14
-        const val IDX_COUNT = 15
+        const val IDX_RECORDING_STATE = 15
+        const val IDX_RECORDING_FRAMES_CAPTURED = 16
+        const val IDX_RECORDING_OVERRUN_FRAMES = 17
+        const val IDX_COUNT = 18
 
         val EMPTY_CONFIG = AudioConfig(
             state = EngineState.UNINITIALIZED,
@@ -141,6 +177,9 @@ class AudioEngine {
             framesRead = 0,
             peakLevel = 0f,
             lastResult = "-",
+            recordingState = RecordingState.IDLE,
+            recordingFramesCaptured = 0,
+            recordingOverrunFrames = 0,
         )
 
         // Numeric values come from oboe/Definitions.h.

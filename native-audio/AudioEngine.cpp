@@ -30,17 +30,7 @@ oboe::Result AudioEngine::openWithSharingMode(oboe::SharingMode sharingMode) {
     return builder.openStream(mStream);
 }
 
-Status AudioEngine::open() {
-    std::lock_guard<std::mutex> guard(mLock);
-
-    if (mDisconnected.load(std::memory_order_relaxed)) {
-        // Oboe already closed the underlying stream; drop our handle to it.
-        releaseStreamLocked();
-    }
-    if (mStream != nullptr) {
-        return Status::InvalidState;
-    }
-
+Status AudioEngine::openStreamLocked() {
     // Exclusive gives the lowest latency but is not always grantable; fall back
     // to Shared. Note AAudio may also silently downgrade, which is why the
     // granted mode is read back in snapshot().
@@ -63,6 +53,20 @@ Status AudioEngine::open() {
     mPeakLevelMicros.store(0, std::memory_order_relaxed);
     mState.store(static_cast<int32_t>(EngineState::Open), std::memory_order_relaxed);
     return Status::Ok;
+}
+
+Status AudioEngine::open() {
+    std::lock_guard<std::mutex> guard(mLock);
+
+    if (mDisconnected.load(std::memory_order_relaxed)) {
+        // Oboe already closed the underlying stream; drop our handle to it.
+        releaseStreamLocked();
+    }
+    if (mStream != nullptr) {
+        return Status::InvalidState;
+    }
+
+    return openStreamLocked();
 }
 
 Status AudioEngine::start() {
@@ -114,8 +118,73 @@ Status AudioEngine::stop() {
     return Status::Ok;
 }
 
+Status AudioEngine::startRecording(const std::string &path) {
+    std::lock_guard<std::mutex> guard(mLock);
+
+    if (mRecording.isRecording()) {
+        return Status::AlreadyRecording;
+    }
+    if (mDisconnected.load(std::memory_order_relaxed)) {
+        return Status::Disconnected;
+    }
+
+    // Auto-open/start the stream so the verification UI only needs one
+    // button. Shares openStreamLocked() with the public open() — both run
+    // under mLock, which is not reentrant, so this must not call open() itself.
+    if (mStream == nullptr) {
+        const Status openStatus = openStreamLocked();
+        if (openStatus != Status::Ok) {
+            return openStatus;
+        }
+    }
+
+    const int32_t state = mState.load(std::memory_order_relaxed);
+    if (state == static_cast<int32_t>(EngineState::Open) ||
+        state == static_cast<int32_t>(EngineState::Stopped)) {
+        const oboe::Result result = mStream->requestStart();
+        mLastResult.store(static_cast<int32_t>(result), std::memory_order_relaxed);
+        if (result != oboe::Result::OK) {
+            return Status::StartFailed;
+        }
+        mState.store(static_cast<int32_t>(EngineState::Started), std::memory_order_relaxed);
+    } else if (state != static_cast<int32_t>(EngineState::Started)) {
+        return Status::InvalidState;
+    }
+
+    return mRecording.start(path, mStream->getSampleRate());
+}
+
+Status AudioEngine::stopRecording() {
+    if (!mRecording.isRecording()) {
+        return Status::NotRecording;
+    }
+
+    // Step 1: stop the Oboe stream first (reuses the existing stop() lifecycle
+    // method — mLock is released before stopAndFinalize() runs, so the
+    // (blocking) drain/join below never holds it).
+    {
+        std::lock_guard<std::mutex> guard(mLock);
+        if (mStream != nullptr &&
+            mState.load(std::memory_order_relaxed) == static_cast<int32_t>(EngineState::Started)) {
+            const oboe::Result result = mStream->requestStop();
+            mLastResult.store(static_cast<int32_t>(result), std::memory_order_relaxed);
+            mState.store(static_cast<int32_t>(EngineState::Stopped), std::memory_order_relaxed);
+        }
+    }
+
+    // Steps 2-6: signal, drain, join, finalize the header, close the file.
+    return mRecording.stopAndFinalize();
+}
+
 Status AudioEngine::close() {
     std::lock_guard<std::mutex> guard(mLock);
+
+    // A close() while still recording (e.g. the activity is being torn down)
+    // is not a normal stop — discard rather than risk finalizing a file the
+    // user never asked to keep.
+    if (mRecording.isRecording()) {
+        mRecording.cancelAndDiscard();
+    }
 
     if (mStream == nullptr) {
         // Never opened, or already closed.
@@ -158,6 +227,9 @@ void AudioEngine::snapshot(int64_t *out, int32_t count) {
     out[kIdxLastResult] = mLastResult.load(std::memory_order_relaxed);
     out[kIdxFramesRead] = mFramesRead.load(std::memory_order_relaxed);
     out[kIdxPeakLevelMicros] = mPeakLevelMicros.load(std::memory_order_relaxed);
+    out[kIdxRecordingState] = static_cast<int64_t>(mRecording.state());
+    out[kIdxRecordingFramesCaptured] = mRecording.framesCaptured();
+    out[kIdxRecordingOverrunFrames] = mRecording.overrunFrames();
 
     if (mStream == nullptr) {
         out[kIdxFormat] = static_cast<int64_t>(oboe::AudioFormat::Invalid);
@@ -188,32 +260,48 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
                                                    void *audioData,
                                                    int32_t numFrames) {
     // REAL-TIME THREAD. No allocation, locking, logging, file I/O or JNI here.
-    // Phase 2 discards the audio and only publishes a peak level so the stream
-    // can be shown to be live. The ring buffer lands in the next phase.
-    const int32_t channels = mCallbackChannels.load(std::memory_order_relaxed);
-    const int32_t sampleCount = numFrames * channels;
-    float peak = 0.0f;
+    // One pass converts to float and downmixes to mono (support for the same
+    // two formats as Phase 2), tracking peak level; when recording is active
+    // the same mono samples are handed to the lock-free ring buffer in
+    // bounded chunks via a fixed-size stack scratch buffer.
+    constexpr int32_t kScratchFrames = 2048;
 
-    if (mCallbackFormat.load(std::memory_order_relaxed) ==
-        static_cast<int32_t>(oboe::AudioFormat::Float)) {
-        const auto *samples = static_cast<const float *>(audioData);
-        for (int32_t i = 0; i < sampleCount; ++i) {
-            const float magnitude = samples[i] < 0.0f ? -samples[i] : samples[i];
-            if (magnitude > peak) {
-                peak = magnitude;
+    const int32_t channels = mCallbackChannels.load(std::memory_order_relaxed);
+    const bool isFloat = mCallbackFormat.load(std::memory_order_relaxed) ==
+                          static_cast<int32_t>(oboe::AudioFormat::Float);
+    const bool recording = mRecording.isRecording();
+
+    const auto *floatSamples = static_cast<const float *>(audioData);
+    const auto *i16Samples = static_cast<const int16_t *>(audioData);
+
+    float peak = 0.0f;
+    float monoScratch[kScratchFrames];
+    int32_t framesDone = 0;
+
+    while (framesDone < numFrames) {
+        const int32_t chunk =
+            (numFrames - framesDone) < kScratchFrames ? (numFrames - framesDone) : kScratchFrames;
+
+        for (int32_t f = 0; f < chunk; ++f) {
+            const int32_t base = (framesDone + f) * channels;
+            float frameSum = 0.0f;
+            for (int32_t c = 0; c < channels; ++c) {
+                const float sample =
+                    isFloat ? floatSamples[base + c]
+                            : static_cast<float>(i16Samples[base + c]) / kInt16Scale;
+                frameSum += sample;
+                const float magnitude = sample < 0.0f ? -sample : sample;
+                if (magnitude > peak) {
+                    peak = magnitude;
+                }
             }
+            monoScratch[f] = channels > 0 ? frameSum / static_cast<float>(channels) : 0.0f;
         }
-    } else {
-        // The device did not grant Float; Oboe hands us I16 instead.
-        const auto *samples = static_cast<const int16_t *>(audioData);
-        for (int32_t i = 0; i < sampleCount; ++i) {
-            const int32_t widened = static_cast<int32_t>(samples[i]);
-            const int32_t magnitude = widened < 0 ? -widened : widened;
-            const float scaled = static_cast<float>(magnitude) / kInt16Scale;
-            if (scaled > peak) {
-                peak = scaled;
-            }
+
+        if (recording) {
+            mRecording.pushSamples(monoScratch, chunk);
         }
+        framesDone += chunk;
     }
 
     mFramesRead.fetch_add(numFrames, std::memory_order_relaxed);

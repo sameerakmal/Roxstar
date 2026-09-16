@@ -24,13 +24,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import java.io.File
 import java.util.Locale
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -38,10 +45,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Startup cleanup (requirement 6): remove any WAV left behind by a
+        // process death between open() and finalize() on a previous run.
+        val draftsDir = draftsDir()
+        lifecycleScope.launch(Dispatchers.IO) {
+            RecordingCleanup.removeOrphaned(draftsDir)
+        }
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AudioEngineScreen(engine)
+                    AudioEngineScreen(engine, draftsDir)
                 }
             }
         }
@@ -52,15 +67,19 @@ class MainActivity : ComponentActivity() {
         engine.release()
         super.onDestroy()
     }
+
+    private fun draftsDir(): File = File(filesDir, "drafts").apply { mkdirs() }
 }
 
 /**
- * Phase 2 verification screen — not the final design. It exists only to drive
- * Open -> Start -> Stop -> Close and show the configuration Oboe actually granted.
+ * Verification screen — not the final design. Phase 2 drives Open/Start/Stop/
+ * Close and shows the stream configuration Oboe granted; Phase 3 adds Start
+ * Recording/Stop Recording and shows the resulting WAV file.
  */
 @Composable
-fun AudioEngineScreen(engine: AudioEngine) {
+fun AudioEngineScreen(engine: AudioEngine, draftsDir: File) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     var hasPermission by remember {
         mutableStateOf(
@@ -74,6 +93,8 @@ fun AudioEngineScreen(engine: AudioEngine) {
 
     var config by remember { mutableStateOf(engine.config()) }
     var lastAction by remember { mutableStateOf("—") }
+    var recordingBusy by remember { mutableStateOf(false) }
+    var lastRecordingPath by remember { mutableStateOf("") }
 
     // Constant for the process lifetime — hoisted so the 200 ms poll below does
     // not re-enter JNI for them on every recomposition.
@@ -136,6 +157,60 @@ fun AudioEngineScreen(engine: AudioEngine) {
                 onClick = { lastAction = "close -> ${engine.close()}" },
                 enabled = state in CLOSEABLE,
             ) { Text("Close") }
+        }
+
+        Text("Recording", style = MaterialTheme.typography.titleMedium)
+        Text("Recording state: ${config.recordingState}")
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = {
+                    recordingBusy = true
+                    val path = File(draftsDir, "${UUID.randomUUID()}.wav").absolutePath
+                    coroutineScope.launch {
+                        // open()/start()/file-create can all block briefly — off the main thread.
+                        val status = withContext(Dispatchers.IO) { engine.startRecording(path) }
+                        lastAction = "startRecording -> $status"
+                        config = engine.config()
+                        recordingBusy = false
+                    }
+                },
+                enabled = hasPermission &&
+                    !recordingBusy &&
+                    config.recordingState == RecordingState.IDLE,
+            ) { Text("Start Recording") }
+
+            Button(
+                onClick = {
+                    recordingBusy = true
+                    coroutineScope.launch {
+                        // Blocking (drains + joins the writer thread) — off the main thread.
+                        val status = withContext(Dispatchers.IO) { engine.stopRecording() }
+                        lastAction = "stopRecording -> $status"
+                        lastRecordingPath = engine.lastRecordingPath()
+                        config = engine.config()
+                        recordingBusy = false
+                    }
+                },
+                enabled = !recordingBusy && config.recordingState == RecordingState.RECORDING,
+            ) { Text(if (recordingBusy) "Stopping…" else "Stop Recording") }
+        }
+
+        val capturedFrames = config.recordingFramesCaptured
+        val elapsedSeconds = if (config.sampleRate > 0) {
+            capturedFrames.toFloat() / config.sampleRate
+        } else {
+            0f
+        }
+        ConfigRow("Frames captured", "$capturedFrames")
+        ConfigRow("Elapsed", String.format(Locale.US, "%.2f s", elapsedSeconds))
+        ConfigRow("Overrun frames", "${config.recordingOverrunFrames}")
+        ConfigRow("Peak level (recording)", String.format(Locale.US, "%.4f", config.peakLevel))
+        if (lastRecordingPath.isNotEmpty()) {
+            Text("Last recording: $lastRecordingPath", style = MaterialTheme.typography.bodySmall)
         }
 
         Text("Actual stream configuration", style = MaterialTheme.typography.titleMedium)
