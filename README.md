@@ -25,13 +25,14 @@ configuration).
 | Spin engine (server-authoritative, 5s eliminations, recovery) | Done |
 | Test harness (Vitest + Supertest + socket.io-client) | Done — 60 unit, 154 integration |
 | Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| CI/CD pipeline and Azure Container Apps deployment config | Written and locally verified — awaits a live deploy |
+| CI/CD pipeline and Azure Container Apps deployment | Done — deployed live, health/readiness/smoke verified, rollback rehearsed |
 | Android app, Oboe audio | **Not started** |
 
 The backend is feature-complete for the assessment's server-side scope: rooms, drafts, real-time
-events and the multiplayer spin, plus the CI/CD and cloud deployment configuration. No Android or
-audio work exists yet. The deployment pipeline is committed but has not been run against a live
-Azure subscription.
+events and the multiplayer spin, plus the CI/CD and cloud deployment. No Android or audio work exists
+yet. The deployment pipeline has been run against the live Azure subscription — CI, OIDC login, image
+build/push, deployment, health/readiness checks and the smoke test all passed, and the rollback path
+was rehearsed against the running service (see [docs/deployment.md §9](docs/deployment.md#9-deployment-evidence)).
 
 ## Technology stack
 
@@ -370,12 +371,16 @@ production database. Full instructions, secrets handling and the rollback runboo
 
 ```
 push to main → CI (typecheck, lint, unit, integration, build)
-             → build + push image tagged :<commit-sha> to Azure Container Registry
+             → build image, push only the immutable :<commit-sha> tag to ACR
              → az containerapp update --image
              → assert replicas are still 1/1
              → smoke test (/health, /ready, real WebSocket upgrade)
-             → automatic rollback to the previous image on failure
+             → all gates passed  → promote :latest to this image
+             → any gate failed   → restore the previous image and verify it
 ```
+
+Deployed and verified live, including a rehearsed rollback — see
+[docs/deployment.md §9](docs/deployment.md#9-deployment-evidence) for the evidence.
 
 One-time setup (registry names are globally unique, so pick one):
 

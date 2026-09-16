@@ -142,13 +142,21 @@ push to main
        └─ deploy
             ├─ azure/login@v2 (OIDC, no secret)
             ├─ record currently deployed image        ← rollback target
-            ├─ build + push  :<commit-sha>  and  :latest
+            ├─ build image, tag :<commit-sha> and :latest locally
+            ├─ push only the immutable :<commit-sha> tag
             ├─ az containerapp update --image :<sha>
             ├─ assert replicas are still 1/1 and mode is Single
             ├─ poll /ready until the new revision serves
             ├─ smoke test (/health, /ready, WebSocket upgrade)
-            └─ on any failure → restore the previous image
+            ├─ all gates passed → push :latest, now pointing at :<sha>
+            └─ any gate failed → restore the previous image, then verify the
+                                  restore (revision healthy, /health, /ready,
+                                  read-only smoke) before declaring rollback done
 ```
+
+`:latest` is deliberately pushed **last**, from the image already built, so a failed build can never
+be the one `:latest` names. See §9 for a live-verified run of both the success path and the rollback
+path.
 
 Manual deploy: **Actions → Deploy to Azure Container Apps → Run workflow**.
 
@@ -224,7 +232,13 @@ cd backend && node scripts/smoke.mjs "$URL"
 ```
 
 The workflow performs exactly this automatically when readiness polling or the smoke test fails,
-using the image tag recorded before the deploy. The failed image stays in the registry for inspection.
+using the image tag recorded before the deploy. Restoring is not treated as the same thing as
+recovering: after issuing the restore, the workflow re-runs the same class of checks the original
+deploy had to pass — waits for the restored revision to report `Healthy`, checks `/health` and
+`/ready`, and runs the smoke test with `SMOKE_SKIP_WRITE=1` (read-only, so an incident rollback never
+writes a throwaway user into production). Any of those failing fails the workflow loudly rather than
+reporting a successful rollback that did not actually restore service. The failed image stays in the
+registry for inspection. This path was rehearsed against the live environment — see §9.
 
 **Traffic splitting is deliberately not used.** It would require multi-revision mode, which runs two
 revisions at once and contradicts the single-replica requirement.
@@ -271,3 +285,81 @@ const socket = io('https://<app>.<region>.azurecontainerapps.io', { auth: { user
   `middleware/currentUser.ts` and the socket handshake so a real mechanism could replace it.
 - **`minReplicas: 1` means always-on billing** beyond the Container Apps free grant. Setting `0`
   removes the cost but drops live WebSocket connections and idles the spin scheduler.
+
+---
+
+## 9. Deployment evidence
+
+The results below are from an actual run against the live `roxstar-backend-rg` resources — not a
+description of intended behaviour. Nothing in this section is inferred; every figure was read back
+from GitHub Actions or from `az` / `curl` against the running service.
+
+### 9.1 Live deployment (GitHub Actions run, commit `d4f2fc3`)
+
+| Check | Result |
+|---|---|
+| CI (typecheck, lint, 60 unit, 154 integration, build, audit) | **Passed** |
+| Azure sign-in via `azure/login@v2` (OIDC, no client secret) | **Passed** |
+| Image built and pushed as `roxstaracr11621.azurecr.io/roxstar-backend:d4f2fc35a7521041b43b0293ff013f1c5151dc22` | **Passed** — immutable SHA tag only, `:latest` not yet touched at this point |
+| `az containerapp update --image` | **Passed** |
+| Replica assertion (`minReplicas`/`maxReplicas` = 1/1, mode = `Single`) | **Passed** |
+| `/health` | **200** — `{"status":"ok",...}` |
+| `/ready` | **200** — `{"status":"ready","database":"connected",...}` |
+| Production smoke test (liveness, readiness, 404 envelope, WebSocket upgrade, authenticated socket) | **Passed**, 6/6 |
+| `:latest` promoted | **Yes**, only after every gate above passed |
+
+`:latest` and `:d4f2fc35a7521041b43b0293ff013f1c5151dc22` were confirmed to resolve to the identical
+manifest digest (`sha256:8ebf6788…`) after promotion — `:latest` names exactly the build that passed
+verification, never a build that did not.
+
+### 9.2 Rollback rehearsal
+
+A full rollback-and-restore cycle was rehearsed against the live app, with production traffic exposed
+throughout (Container Apps has no maintenance mode; every step ran against the real ingress).
+
+**Rollback — `d4f2fc3` → `013172a`**
+
+| Check | Result |
+|---|---|
+| Target image | `roxstaracr11621.azurecr.io/roxstar-backend:013172a097ebfd4018b9011b8ebb4af823d7491f` — an immutable SHA tag, **not** `:latest` |
+| `az containerapp update --image` | **Passed** |
+| New revision (`roxstar-backend--0000003`) reported `Healthy` | **Passed** |
+| `/health` | **200** |
+| `/ready` | **200** — `{"status":"ready","database":"connected",...}` |
+| Read-only smoke test (`SMOKE_SKIP_WRITE=1`) | **Passed** — 4 checks run, the write-dependent authenticated-socket check skipped by design so the rehearsal added no test data to production |
+
+**Restoration — `013172a` → `d4f2fc3`**
+
+| Check | Result |
+|---|---|
+| Target image | `roxstaracr11621.azurecr.io/roxstar-backend:d4f2fc35a7521041b43b0293ff013f1c5151dc22` |
+| `az containerapp update --image` | **Passed** |
+| New revision (`roxstar-backend--0000004`) reported `Healthy` | **Passed** |
+| `/health` | **200** |
+| `/ready` | **200** — `{"status":"ready","database":"connected",...}` |
+| Full smoke test (unrestricted — no `SMOKE_SKIP_WRITE`) | **Passed**, 6/6, including a real authenticated WebSocket connection |
+| Final deployed image | `d4f2fc35a7521041b43b0293ff013f1c5151dc22` — confirmed live and matching the pre-rehearsal state |
+| `:latest` | Confirmed still pointing at `d4f2fc3` (same digest, unchanged by the rehearsal) |
+
+Restoration used the **normal** smoke test rather than the read-only one, since restoring to the
+already-verified newest image is the routine end of a rehearsal, not an incident — the small amount of
+test data that check creates is expected in that situation. That run created **one throwaway user**
+(`displayName` prefixed `smoke-…`) via `POST /users` as part of proving the authenticated WebSocket
+path end-to-end. This is smoke-test scaffolding, not application data — no room, draft or spin was
+created, and it carries no relation to any real user or Roxstar assessment content. It can be deleted
+directly from Atlas at any time; nothing in the application depends on its absence.
+
+### 9.3 Production configuration verified unchanged throughout
+
+Read back from the live Container App after both the deploy and the rollback rehearsal, confirming
+none of it drifted:
+
+| Setting | Verified value |
+|---|---|
+| Replicas | `minReplicas: 1`, `maxReplicas: 1` |
+| Revision mode | `Single` |
+| Database secret | `mongodb-uri` (Container Apps secret, unchanged) |
+| Probes | Liveness (`/health`), Readiness (`/ready`), Startup (`/ready`) — all three present |
+
+No OIDC credential, ACR role assignment, probe definition, replica count, or secret was touched by
+either the deploy or the rehearsal — only the container image reference changed, each time.
