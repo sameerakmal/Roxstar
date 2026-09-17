@@ -195,6 +195,42 @@ class RoomApiClient(
         }
     }
 
+    /**
+     * Starts a new spin in [roomId] on behalf of room owner [userId].
+     * Endpoint: `POST /rooms/{roomId}/spins`
+     * Header: `x-user-id: {userId}`
+     */
+    suspend fun startSpin(roomId: String, userId: String): Result<SpinStateDto> = withContext(Dispatchers.IO) {
+        val url = "$baseUrl/rooms/${roomId.trim()}/spins"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader(HEADER_USER_ID, userId.trim())
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        executeRequest(request) { responseBody ->
+            SpinStateDto.fromJson(JSONObject(responseBody))
+        }
+    }
+
+    /**
+     * Retrieves the state of an existing spin [spinId].
+     * Endpoint: `GET /spins/{spinId}`
+     * Header: `x-user-id: {userId}`
+     */
+    suspend fun getSpinState(spinId: String, userId: String): Result<SpinStateDto> = withContext(Dispatchers.IO) {
+        val url = "$baseUrl/spins/${spinId.trim()}"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader(HEADER_USER_ID, userId.trim())
+            .get()
+            .build()
+
+        executeRequest(request) { responseBody ->
+            SpinStateDto.fromJson(JSONObject(responseBody))
+        }
+    }
+
     private fun <T> executeRequest(
         request: Request,
         parser: (String) -> T,

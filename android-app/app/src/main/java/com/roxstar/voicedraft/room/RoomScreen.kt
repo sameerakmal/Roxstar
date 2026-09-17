@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roxstar.voicedraft.network.ParticipantDto
 import com.roxstar.voicedraft.network.SharedDraftDto
+import com.roxstar.voicedraft.spin.SpinUiState
+import com.roxstar.voicedraft.spin.SpinView
 
 /**
  * Screen providing room entry, real-time presence display, and live shared-draft events.
@@ -65,6 +67,7 @@ fun RoomScreen(
     onNavigateBack: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val spinUiState by viewModel.spinViewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.errorMessage) {
@@ -80,6 +83,22 @@ fun RoomScreen(
         if (msg != null) {
             snackbarHostState.showSnackbar(msg)
             viewModel.clearStatusMessage()
+        }
+    }
+
+    LaunchedEffect(spinUiState.errorMessage) {
+        val err = spinUiState.errorMessage
+        if (err != null) {
+            snackbarHostState.showSnackbar(err)
+            viewModel.spinViewModel.clearErrorMessage()
+        }
+    }
+
+    LaunchedEffect(spinUiState.statusMessage) {
+        val msg = spinUiState.statusMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.spinViewModel.clearStatusMessage()
         }
     }
 
@@ -134,6 +153,8 @@ fun RoomScreen(
             } else {
                 ActiveRoomView(
                     uiState = uiState,
+                    spinUiState = spinUiState,
+                    onStartSpin = { viewModel.startSpin() },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -230,8 +251,12 @@ private fun RoomLobby(
 @Composable
 private fun ActiveRoomView(
     uiState: RoomUiState,
+    spinUiState: SpinUiState,
+    onStartSpin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isOwner = uiState.roomInfo?.ownerUserId == uiState.currentUserId
+
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp),
@@ -261,7 +286,7 @@ private fun ActiveRoomView(
                         fontFamily = FontFamily.Monospace,
                     )
                     Text(
-                        text = "Owner: ${uiState.roomInfo?.ownerUserId ?: "Unknown"}${if (uiState.roomInfo?.ownerUserId == uiState.currentUserId) " (You)" else ""}",
+                        text = "Owner: ${uiState.roomInfo?.ownerUserId ?: "Unknown"}${if (isOwner) " (You)" else ""}",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
@@ -301,6 +326,17 @@ private fun ActiveRoomView(
                     }
                 }
             }
+        }
+
+        // Spin Elimination Game
+        item {
+            SpinView(
+                uiState = spinUiState,
+                isRoomOwner = isOwner,
+                currentUserId = uiState.currentUserId,
+                participantCount = uiState.participants.size,
+                onStartSpin = onStartSpin,
+            )
         }
 
         // Shared Drafts Section

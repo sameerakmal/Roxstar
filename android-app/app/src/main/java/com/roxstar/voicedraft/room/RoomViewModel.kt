@@ -6,6 +6,7 @@ import com.roxstar.voicedraft.network.RoomApiClient
 import com.roxstar.voicedraft.network.RoomSocketClient
 import com.roxstar.voicedraft.network.RoomSocketEvent
 import com.roxstar.voicedraft.network.SocketConnectionState
+import com.roxstar.voicedraft.spin.SpinViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,10 +18,12 @@ import kotlinx.coroutines.launch
  * Orchestrates room operations by combining:
  * 1. Authoritative REST state mutations via [RoomApiClient]
  * 2. Real-time broadcast and presence synchronization via [RoomSocketClient]
+ * 3. Live Spin game elimination flow via [SpinViewModel]
  */
 class RoomViewModel(
     private val apiClient: RoomApiClient = RoomApiClient(),
-    private val socketClient: RoomSocketClient = RoomSocketClient(),
+    val socketClient: RoomSocketClient = RoomSocketClient(),
+    val spinViewModel: SpinViewModel = SpinViewModel(apiClient, socketClient),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoomUiState())
@@ -93,6 +96,12 @@ class RoomViewModel(
 
                     is RoomSocketEvent.Error -> {
                         _uiState.update { it.copy(errorMessage = event.message) }
+                    }
+
+                    is RoomSocketEvent.SpinStarted,
+                    is RoomSocketEvent.UserEliminated,
+                    is RoomSocketEvent.WinnerAnnounced -> {
+                        // Spin elimination game events are handled by spinViewModel
                     }
                 }
             }
@@ -208,6 +217,7 @@ class RoomViewModel(
                 apiClient.leaveRoom(roomId, userId)
             }
             socketClient.disconnect()
+            spinViewModel.reset()
 
             _uiState.update {
                 it.copy(
@@ -221,6 +231,15 @@ class RoomViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Triggers the Spin elimination game in the current room on behalf of the owner.
+     */
+    fun startSpin() {
+        val roomId = _uiState.value.currentRoomId ?: return
+        val userId = _uiState.value.currentUserId ?: return
+        spinViewModel.startSpin(roomId, userId)
     }
 
     fun clearErrorMessage() {

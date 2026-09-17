@@ -121,10 +121,131 @@ data class ParticipantDto(
     }
 }
 
+data class SpinPlayerDto(
+    val userId: String,
+    val displayName: String,
+    val status: String,
+    val eliminationOrder: Int? = null,
+    val eliminationReason: String? = null,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): SpinPlayerDto = SpinPlayerDto(
+            userId = json.getString("userId"),
+            displayName = json.getString("displayName"),
+            status = json.getString("status"),
+            eliminationOrder = if (json.has("eliminationOrder") && !json.isNull("eliminationOrder")) {
+                json.getInt("eliminationOrder")
+            } else {
+                null
+            },
+            eliminationReason = json.optString("eliminationReason").takeIf { it.isNotEmpty() },
+        )
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("userId", userId)
+        put("displayName", displayName)
+        put("status", status)
+        eliminationOrder?.let { put("eliminationOrder", it) }
+        eliminationReason?.let { put("eliminationReason", it) }
+    }
+}
+
+data class ActiveSpinDto(
+    val spinId: String,
+    val status: String,
+    val startedAt: String? = null,
+    val participants: List<SpinPlayerDto> = emptyList(),
+    val remainingPlayers: List<SpinPlayerDto> = emptyList(),
+    val winner: SpinPlayerDto? = null,
+    val lastSequenceNumber: Long = 0L,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): ActiveSpinDto {
+            val participantsArray = json.optJSONArray("participants") ?: JSONArray()
+            val participants = ArrayList<SpinPlayerDto>(participantsArray.length())
+            for (i in 0 until participantsArray.length()) {
+                val item = participantsArray.optJSONObject(i)
+                if (item != null) participants.add(SpinPlayerDto.fromJson(item))
+            }
+
+            val remainingArray = json.optJSONArray("remainingPlayers") ?: JSONArray()
+            val remaining = ArrayList<SpinPlayerDto>(remainingArray.length())
+            for (i in 0 until remainingArray.length()) {
+                val item = remainingArray.optJSONObject(i)
+                if (item != null) remaining.add(SpinPlayerDto.fromJson(item))
+            }
+
+            val winnerObj = json.optJSONObject("winner")
+            val winner = if (winnerObj != null) SpinPlayerDto.fromJson(winnerObj) else null
+
+            return ActiveSpinDto(
+                spinId = json.getString("spinId"),
+                status = json.getString("status"),
+                startedAt = json.optString("startedAt").takeIf { it.isNotEmpty() },
+                participants = participants,
+                remainingPlayers = remaining,
+                winner = winner,
+                lastSequenceNumber = json.optLong("lastSequenceNumber", 0L),
+            )
+        }
+    }
+}
+
+data class SpinStateDto(
+    val spinId: String,
+    val roomId: String,
+    val status: String,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    val startedByUserId: String? = null,
+    val abortReason: String? = null,
+    val participants: List<SpinPlayerDto> = emptyList(),
+    val remainingPlayers: List<SpinPlayerDto> = emptyList(),
+    val winner: SpinPlayerDto? = null,
+    val lastSequenceNumber: Long = 0L,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): SpinStateDto {
+            val participantsArray = json.optJSONArray("participants") ?: JSONArray()
+            val participants = ArrayList<SpinPlayerDto>(participantsArray.length())
+            for (i in 0 until participantsArray.length()) {
+                val item = participantsArray.optJSONObject(i)
+                if (item != null) participants.add(SpinPlayerDto.fromJson(item))
+            }
+
+            val remainingArray = json.optJSONArray("remainingPlayers") ?: JSONArray()
+            val remaining = ArrayList<SpinPlayerDto>(remainingArray.length())
+            for (i in 0 until remainingArray.length()) {
+                val item = remainingArray.optJSONObject(i)
+                if (item != null) remaining.add(SpinPlayerDto.fromJson(item))
+            }
+
+            val winnerObj = json.optJSONObject("winner")
+            val winner = if (winnerObj != null) SpinPlayerDto.fromJson(winnerObj) else null
+
+            return SpinStateDto(
+                spinId = json.getString("spinId"),
+                roomId = json.getString("roomId"),
+                status = json.getString("status"),
+                startedAt = json.optString("startedAt").takeIf { it.isNotEmpty() },
+                completedAt = json.optString("completedAt").takeIf { it.isNotEmpty() },
+                startedByUserId = json.optString("startedByUserId").takeIf { it.isNotEmpty() },
+                abortReason = json.optString("abortReason").takeIf { it.isNotEmpty() },
+                participants = participants,
+                remainingPlayers = remaining,
+                winner = winner,
+                lastSequenceNumber = json.optLong("lastSequenceNumber", 0L),
+            )
+        }
+    }
+}
+
 data class RoomStateDto(
     val room: RoomDto,
     val participants: List<ParticipantDto> = emptyList(),
     val sharedDrafts: List<SharedDraftDto> = emptyList(),
+    val activeSpin: ActiveSpinDto? = null,
 ) {
     companion object {
         fun fromJson(json: JSONObject): RoomStateDto {
@@ -142,10 +263,14 @@ data class RoomStateDto(
                 sharedDrafts.add(SharedDraftDto.fromJson(sharedDraftsArray.getJSONObject(i)))
             }
 
+            val activeSpinObj = json.optJSONObject("activeSpin")
+            val activeSpin = if (activeSpinObj != null) ActiveSpinDto.fromJson(activeSpinObj) else null
+
             return RoomStateDto(
                 room = RoomDto.fromJson(roomJson),
                 participants = participants,
                 sharedDrafts = sharedDrafts,
+                activeSpin = activeSpin,
             )
         }
     }

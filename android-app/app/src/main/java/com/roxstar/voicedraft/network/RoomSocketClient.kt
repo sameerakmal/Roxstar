@@ -49,6 +49,31 @@ sealed interface RoomSocketEvent {
         val roomId: String,
         val draft: SharedDraftDto,
     ) : RoomSocketEvent
+    data class SpinStarted(
+        val roomId: String,
+        val spinId: String,
+        val status: String,
+        val startedAt: String?,
+        val eligiblePlayers: List<SpinPlayerDto>,
+        val remainingPlayers: List<SpinPlayerDto>,
+        val sequenceNumber: Long,
+    ) : RoomSocketEvent
+    data class UserEliminated(
+        val roomId: String,
+        val spinId: String,
+        val eliminatedUser: SpinPlayerDto,
+        val eliminationOrder: Int,
+        val remainingPlayers: List<SpinPlayerDto>,
+        val sequenceNumber: Long,
+    ) : RoomSocketEvent
+    data class WinnerAnnounced(
+        val roomId: String,
+        val spinId: String,
+        val status: String,
+        val winner: SpinPlayerDto,
+        val completedAt: String?,
+        val sequenceNumber: Long,
+    ) : RoomSocketEvent
     data class Error(val message: String) : RoomSocketEvent
 }
 
@@ -66,6 +91,9 @@ class RoomSocketClient(
         const val EVENT_USER_JOINED = "user_joined"
         const val EVENT_USER_LEFT = "user_left"
         const val EVENT_DRAFT_SHARED = "draft_shared"
+        const val EVENT_SPIN_STARTED = "spin_started"
+        const val EVENT_USER_ELIMINATED = "user_eliminated"
+        const val EVENT_WINNER_ANNOUNCED = "winner_announced"
 
         const val CLIENT_JOIN_ROOM = "join_room"
         const val CLIENT_LEAVE_ROOM = "leave_room"
@@ -278,6 +306,86 @@ class RoomSocketClient(
                 scope.launch { _events.emit(RoomSocketEvent.Error("Malformed draft_shared: ${e.message}")) }
             }
         }
+
+        s.on(EVENT_SPIN_STARTED) { args ->
+            val json = args.firstOrNull() as? JSONObject ?: return@on
+            try {
+                val roomId = json.getString("roomId")
+                val spinId = json.getString("spinId")
+                val status = json.optString("status", "RUNNING")
+                val startedAt = json.optString("startedAt").takeIf { it.isNotEmpty() }
+                val eligiblePlayers = parseSpinPlayers(json.optJSONArray("eligiblePlayers"))
+                val remainingPlayers = parseSpinPlayers(json.optJSONArray("remainingPlayers"))
+                val sequenceNumber = json.optLong("sequenceNumber", 0L)
+                scope.launch {
+                    _events.emit(
+                        RoomSocketEvent.SpinStarted(
+                            roomId = roomId,
+                            spinId = spinId,
+                            status = status,
+                            startedAt = startedAt,
+                            eligiblePlayers = eligiblePlayers,
+                            remainingPlayers = remainingPlayers,
+                            sequenceNumber = sequenceNumber,
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                scope.launch { _events.emit(RoomSocketEvent.Error("Malformed spin_started: ${e.message}")) }
+            }
+        }
+
+        s.on(EVENT_USER_ELIMINATED) { args ->
+            val json = args.firstOrNull() as? JSONObject ?: return@on
+            try {
+                val roomId = json.getString("roomId")
+                val spinId = json.getString("spinId")
+                val eliminatedUser = SpinPlayerDto.fromJson(json.getJSONObject("eliminatedUser"))
+                val eliminationOrder = json.getInt("eliminationOrder")
+                val remainingPlayers = parseSpinPlayers(json.optJSONArray("remainingPlayers"))
+                val sequenceNumber = json.optLong("sequenceNumber", 0L)
+                scope.launch {
+                    _events.emit(
+                        RoomSocketEvent.UserEliminated(
+                            roomId = roomId,
+                            spinId = spinId,
+                            eliminatedUser = eliminatedUser,
+                            eliminationOrder = eliminationOrder,
+                            remainingPlayers = remainingPlayers,
+                            sequenceNumber = sequenceNumber,
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                scope.launch { _events.emit(RoomSocketEvent.Error("Malformed user_eliminated: ${e.message}")) }
+            }
+        }
+
+        s.on(EVENT_WINNER_ANNOUNCED) { args ->
+            val json = args.firstOrNull() as? JSONObject ?: return@on
+            try {
+                val roomId = json.getString("roomId")
+                val spinId = json.getString("spinId")
+                val status = json.optString("status", "COMPLETED")
+                val winner = SpinPlayerDto.fromJson(json.getJSONObject("winner"))
+                val completedAt = json.optString("completedAt").takeIf { it.isNotEmpty() }
+                val sequenceNumber = json.optLong("sequenceNumber", 0L)
+                scope.launch {
+                    _events.emit(
+                        RoomSocketEvent.WinnerAnnounced(
+                            roomId = roomId,
+                            spinId = spinId,
+                            status = status,
+                            winner = winner,
+                            completedAt = completedAt,
+                            sequenceNumber = sequenceNumber,
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                scope.launch { _events.emit(RoomSocketEvent.Error("Malformed winner_announced: ${e.message}")) }
+            }
+        }
     }
 
     private fun parseParticipants(array: JSONArray?): List<ParticipantDto> {
@@ -287,6 +395,18 @@ class RoomSocketClient(
             val obj = array.optJSONObject(i)
             if (obj != null) {
                 list.add(ParticipantDto.fromJson(obj))
+            }
+        }
+        return list
+    }
+
+    private fun parseSpinPlayers(array: JSONArray?): List<SpinPlayerDto> {
+        if (array == null) return emptyList()
+        val list = ArrayList<SpinPlayerDto>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i)
+            if (obj != null) {
+                list.add(SpinPlayerDto.fromJson(obj))
             }
         }
         return list
