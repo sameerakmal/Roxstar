@@ -1,0 +1,756 @@
+openapi: 3.0.3
+info:
+  title: Roxstar Voice Draft, Room & Spin Wheel API
+  description: >
+    Authoritative backend REST API for the Roxstar candidate technical assessment.
+    Supports user identity bootstrap, voice draft registry, authoritative room management,
+    draft sharing, and multiplayer spin wheel operations.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+  - url: https://roxstar-backend.braveocean-71fd8d06.centralindia.azurecontainerapps.io
+    description: Azure Container Apps production deployment
+
+components:
+  securitySchemes:
+    UserIdAuth:
+      type: apiKey
+      in: header
+      name: x-user-id
+      description: >
+        MongoDB ObjectId representing the authenticated caller.
+        Validated by the currentUser middleware.
+
+  parameters:
+    RequestIdHeader:
+      name: x-request-id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Correlation ID for request tracing. Returned in all responses.
+
+    RoomIdParam:
+      name: roomId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[0-9a-fA-F]{24}$'
+      description: 24-hex character MongoDB ObjectId of the Room.
+
+    SpinIdParam:
+      name: spinId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[0-9a-fA-F]{24}$'
+      description: 24-hex character MongoDB ObjectId of the Spin.
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - details
+          properties:
+            code:
+              type: string
+              example: ROOM_NOT_FOUND
+            message:
+              type: string
+              example: Room does not exist
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+
+    UserDto:
+      type: object
+      required:
+        - id
+        - displayName
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: 66e85bc7b39a3f2c5d123456
+        displayName:
+          type: string
+          example: Alice
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required:
+        - displayName
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 50
+          example: Alice
+
+    RoomDto:
+      type: object
+      required:
+        - id
+        - status
+        - ownerUserId
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          example: 66e85bc7b39a3f2c5d123456
+        status:
+          type: string
+          enum: [ACTIVE, CLOSED]
+          example: ACTIVE
+        ownerUserId:
+          type: string
+          example: 66e85bc7b39a3f2c5d654321
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ParticipantDto:
+      type: object
+      required:
+        - userId
+        - displayName
+        - membershipState
+        - connectionState
+        - joinedAt
+      properties:
+        userId:
+          type: string
+          example: 66e85bc7b39a3f2c5d654321
+        displayName:
+          type: string
+          example: Alice
+        membershipState:
+          type: string
+          enum: [JOINED, LEFT]
+          example: JOINED
+        connectionState:
+          type: string
+          enum: [CONNECTED, DISCONNECTED]
+          example: CONNECTED
+        joinedAt:
+          type: string
+          format: date-time
+
+    SharedDraftDto:
+      type: object
+      required:
+        - draftId
+        - name
+        - durationMs
+        - effect
+        - fileLocation
+        - sharedByUserId
+        - sharedAt
+      properties:
+        draftId:
+          type: string
+          example: 66e85bc7b39a3f2c5d777777
+        name:
+          type: string
+          example: Morning Acoustic Idea
+        durationMs:
+          type: integer
+          example: 12500
+        effect:
+          type: string
+          enum: [NONE, ECHO, REVERB, PITCH_SHIFT]
+          example: REVERB
+        fileLocation:
+          type: string
+          example: drafts/acoustic.wav
+        sharedByUserId:
+          type: string
+          example: 66e85bc7b39a3f2c5d654321
+        sharedAt:
+          type: string
+          format: date-time
+
+    SpinPlayerDto:
+      type: object
+      required:
+        - userId
+        - displayName
+        - status
+        - eliminationOrder
+        - eliminationReason
+      properties:
+        userId:
+          type: string
+          example: 66e85bc7b39a3f2c5d654321
+        displayName:
+          type: string
+          example: Alice
+        status:
+          type: string
+          enum: [ACTIVE, ELIMINATED, WINNER]
+          example: ACTIVE
+        eliminationOrder:
+          type: integer
+          nullable: true
+          example: null
+        eliminationReason:
+          type: string
+          enum: [TIMER, LEFT]
+          nullable: true
+          example: null
+
+    ActiveSpinDto:
+      type: object
+      required:
+        - spinId
+        - status
+        - startedAt
+        - participants
+        - remainingPlayers
+        - winner
+        - lastSequenceNumber
+      properties:
+        spinId:
+          type: string
+          example: 66e85bc7b39a3f2c5d999999
+        status:
+          type: string
+          enum: [WAITING, RUNNING, COMPLETED, ABORTED]
+          example: RUNNING
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpinPlayerDto'
+        remainingPlayers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpinPlayerDto'
+        winner:
+          $ref: '#/components/schemas/SpinPlayerDto'
+          nullable: true
+        lastSequenceNumber:
+          type: integer
+          example: 2
+
+    RoomStateDto:
+      type: object
+      required:
+        - room
+        - participants
+        - sharedDrafts
+        - activeSpin
+      properties:
+        room:
+          $ref: '#/components/schemas/RoomDto'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantDto'
+        sharedDrafts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SharedDraftDto'
+        activeSpin:
+          $ref: '#/components/schemas/ActiveSpinDto'
+          nullable: true
+
+    DraftDto:
+      type: object
+      required:
+        - id
+        - ownerUserId
+        - name
+        - durationMs
+        - effect
+        - fileLocation
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: 66e85bc7b39a3f2c5d777777
+        ownerUserId:
+          type: string
+          example: 66e85bc7b39a3f2c5d654321
+        name:
+          type: string
+          example: Chorus Harmony
+        durationMs:
+          type: integer
+          example: 8400
+        effect:
+          type: string
+          enum: [NONE, ECHO, REVERB, PITCH_SHIFT]
+          example: ECHO
+        fileLocation:
+          type: string
+          example: drafts/chorus.wav
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateDraftRequest:
+      type: object
+      required:
+        - name
+        - durationMs
+        - fileLocation
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Chorus Harmony
+        durationMs:
+          type: integer
+          minimum: 0
+          example: 8400
+        fileLocation:
+          type: string
+          minLength: 1
+          example: drafts/chorus.wav
+        effect:
+          type: string
+          enum: [NONE, ECHO, REVERB, PITCH_SHIFT]
+          default: NONE
+          example: ECHO
+
+    ShareDraftRequest:
+      type: object
+      required:
+        - draftId
+      properties:
+        draftId:
+          type: string
+          pattern: '^[0-9a-fA-F]{24}$'
+          example: 66e85bc7b39a3f2c5d777777
+
+    SpinEventDto:
+      type: object
+      required:
+        - sequenceNumber
+        - eventType
+        - payload
+        - createdAt
+      properties:
+        sequenceNumber:
+          type: integer
+          example: 1
+        eventType:
+          type: string
+          enum: [spin_started, user_eliminated, winner_announced, spin_aborted]
+          example: spin_started
+        payload:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+
+    SpinStateDto:
+      type: object
+      required:
+        - spinId
+        - roomId
+        - status
+        - startedAt
+        - completedAt
+        - startedByUserId
+        - abortReason
+        - participants
+        - remainingPlayers
+        - winner
+        - lastSequenceNumber
+        - events
+      properties:
+        spinId:
+          type: string
+          example: 66e85bc7b39a3f2c5d999999
+        roomId:
+          type: string
+          example: 66e85bc7b39a3f2c5d123456
+        status:
+          type: string
+          enum: [WAITING, RUNNING, COMPLETED, ABORTED]
+          example: COMPLETED
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedByUserId:
+          type: string
+          nullable: true
+          example: 66e85bc7b39a3f2c5d654321
+        abortReason:
+          type: string
+          nullable: true
+          example: null
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpinPlayerDto'
+        remainingPlayers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpinPlayerDto'
+        winner:
+          $ref: '#/components/schemas/SpinPlayerDto'
+          nullable: true
+        lastSequenceNumber:
+          type: integer
+          example: 3
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpinEventDto'
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      description: Returns 200 if the Node.js process is active. Does not check database.
+      responses:
+        '200':
+          description: Process is live.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  uptime:
+                    type: number
+                    example: 124.5
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /ready:
+    get:
+      summary: Readiness probe
+      description: Returns 200 if process is running and MongoDB is connected.
+      responses:
+        '200':
+          description: Backend is ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+                  database:
+                    type: string
+                    example: connected
+                  timestamp:
+                    type: string
+                    format: date-time
+        '503':
+          description: Database is disconnected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /users:
+    post:
+      summary: Register / bootstrap user
+      description: Creates a new user record. Unauthenticated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+        '400':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms:
+    post:
+      summary: Create a room
+      description: Creates an active room with the caller as owner. Caller is automatically joined.
+      security:
+        - UserIdAuth: []
+      responses:
+        '201':
+          description: Room created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStateDto'
+        '401':
+          description: Missing or invalid x-user-id header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms/{roomId}:
+    get:
+      summary: Get room details and state
+      description: Returns room state, participant list, shared drafts, and any active spin.
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdParam'
+      responses:
+        '200':
+          description: Room state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStateDto'
+        '404':
+          description: Room not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms/{roomId}/join:
+    post:
+      summary: Join a room
+      description: Adds the caller to the room. Idempotent (returns 201 on first join, 200 on repeat).
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdParam'
+      responses:
+        '200':
+          description: User was already joined (idempotent repeat).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStateDto'
+        '201':
+          description: User successfully joined the room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStateDto'
+        '404':
+          description: Room not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Room is closed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms/{roomId}/leave:
+    post:
+      summary: Leave a room
+      description: Sets caller's membershipState to LEFT. If mid-spin, player is eliminated immediately.
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdParam'
+      responses:
+        '200':
+          description: Left room successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStateDto'
+        '403':
+          description: Caller is not an active member of this room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Room not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms/{roomId}/drafts:
+    post:
+      summary: Share a draft with the room
+      description: Shares a draft owned by the caller with the specified room. Broadcasts draft_shared.
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShareDraftRequest'
+      responses:
+        '200':
+          description: Draft was already shared with this room (idempotent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedDraftDto'
+        '201':
+          description: Draft newly shared with room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedDraftDto'
+        '403':
+          description: Caller is not a room member, or does not own the draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Room or draft not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /rooms/{roomId}/spins:
+    post:
+      summary: Start a spin wheel
+      description: Room owner initiates an elimination spin. Requires between 3 and 20 members.
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdParam'
+      responses:
+        '201':
+          description: Spin started successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpinStateDto'
+        '403':
+          description: Caller is not the room owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Room not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Active spin already running, or insufficient/excess players (must be 3-20).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /spins/{spinId}:
+    get:
+      summary: Get spin status and results
+      description: Returns spin state, participants, remaining players, winner, and historical events.
+      security:
+        - UserIdAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SpinIdParam'
+      responses:
+        '200':
+          description: Spin state and event history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpinStateDto'
+        '404':
+          description: Spin not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /drafts:
+    get:
+      summary: List user's drafts
+      description: Returns all drafts owned by the authenticated caller.
+      security:
+        - UserIdAuth: []
+      responses:
+        '200':
+          description: List of drafts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - drafts
+                properties:
+                  drafts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DraftDto'
+    post:
+      summary: Register draft metadata
+      description: Registers a newly recorded draft's metadata on the backend.
+      security:
+        - UserIdAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+      responses:
+        '201':
+          description: Draft metadata registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftDto'
+        '400':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'

@@ -8,31 +8,33 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 
 ## Status
 
-This repository is being built in phases. **Phases 1-5 are complete** (backend foundation; database
-models and repositories; room REST API; real-time events and the spin engine; cloud and DevOps
-configuration).
+**Phases 1–6 are complete and verified.**
 
-| Area | Status |
-|---|---|
-| Repository skeleton, git, `.gitignore` | Done |
-| Backend: TypeScript, Express, error handling, config | Done |
-| Backend: Socket.IO server initialization | Done (connection logging only — no room or spin events yet) |
-| Backend: MongoDB connection via Mongoose | Done, verified against a live instance |
-| `/health` and `/ready` endpoints | Done |
-| Database models, indexes and repositories | Done — 8 models, 13 indexes, repository layer |
-| Room REST API (create/join/leave/state/share draft) | Done — services, DTOs, domain errors |
-| Socket.IO real-time events + presence | Done — all seven mandatory events |
-| Spin engine (server-authoritative, 5s eliminations, recovery) | Done |
-| Test harness (Vitest + Supertest + socket.io-client) | Done — 60 unit, 154 integration |
-| Dockerfile and local compose | Done — image builds, stack runs, container reports healthy |
-| CI/CD pipeline and Azure Container Apps deployment | Done — deployed live, health/readiness/smoke verified, rollback rehearsed |
-| Android app, Oboe audio | **Not started** |
+| Area | Status | Verification Evidence |
+|---|---|---|
+| Repository skeleton, git, `.gitignore` | Done | Repository structure matches assessment |
+| Backend: TypeScript, Express, error handling, config | Done | `npm run typecheck`, `npm run lint`, `npm run build` |
+| Backend: Socket.IO server initialization | Done | All 7 mandatory room events implemented |
+| Backend: MongoDB connection via Mongoose | Done | Verified against live instance & Atlas |
+| `/health` and `/ready` endpoints | Done | Unit & smoke test verified (200 / 503) |
+| Database models, indexes and repositories | Done | 8 models, 13 indexes, repository layer |
+| Room REST API (create/join/leave/state/share draft) | Done | Services, DTOs, domain errors, idempotency |
+| Socket.IO real-time events + presence | Done | All 7 mandatory room events, presence separation |
+| Spin engine (server-authoritative, 5s eliminations, recovery) | Done | Absolute deadline timers, CAS winner, recovery |
+| Concurrency & Correlation Logging (SP-15, BA-10) | Done | `x-request-id` tracing, atomic CAS, partial unique index |
+| Test harness (Vitest + Supertest + socket.io-client) | Done | 60 unit tests, 155 integration tests |
+| Dockerfile and local compose | Done | Image builds, non-root user, container reports healthy |
+| CI/CD pipeline and Azure Container Apps deployment | Done | Deployed live, health/readiness/smoke verified, rollback rehearsed |
+| Android app foundation & Compose UI | Done | Jetpack Compose UI (Record, Drafts, Room, Spin screens) |
+| Native audio engine (Oboe C++ & JNI) | Done | AAudio/OpenSL ES lifecycle, real-time safety, 75 C++ unit tests |
+| Real-time audio effects (Echo, Reverb, Pitch Shift) | Done | In-place DSP in Oboe callback, 3 selectable effects |
+| Local Draft persistence & Playback | Done | `<id>.wav` + `<id>.json` storage, native Oboe playback |
+| Room & Draft sharing integration | Done | OkHttp REST client, local draft metadata sharing |
+| Realtime Room & Spin wheel UI | Done | Socket.IO client, animated canvas wheel, elimination sequence |
+| Android build, lint, and unit testing | Done | 98 JVM unit tests (0 failures), `assembleDebug` (3 ABIs), `lintDebug` |
+| System & API Documentation | Done | System architecture, audio flow, event flow, state machine, OpenAPI 3.0 |
 
-The backend is feature-complete for the assessment's server-side scope: rooms, drafts, real-time
-events and the multiplayer spin, plus the CI/CD and cloud deployment. No Android or audio work exists
-yet. The deployment pipeline has been run against the live Azure subscription — CI, OIDC login, image
-build/push, deployment, health/readiness checks and the smoke test all passed, and the rollback path
-was rehearsed against the running service (see [docs/deployment.md §9](docs/deployment.md#9-deployment-evidence)).
+All server-side features, cloud deployment, and Android client functionality are fully implemented and verified via automated test suites.
 
 ## Technology stack
 
@@ -46,26 +48,29 @@ was rehearsed against the running service (see [docs/deployment.md §9](docs/dep
 | ODM | Mongoose |
 | Validation | Zod |
 | Logging | Pino (`pino-http` for request logs) |
-| Testing | Vitest + Supertest |
+| Testing (Backend) | Vitest + Supertest |
 | Container | Docker |
-| Android (later phase) | Kotlin + Oboe via NDK |
+| Android Client | Kotlin + Jetpack Compose |
+| Native Audio | C++17 + Oboe via NDK/CMake |
+| Networking (Android) | OkHttp + Kotlinx Serialization + Socket.IO Java Client |
 
 ## Repository structure
 
 ```
-android-app/          Android application (later phase)
-native-audio/         C++ Oboe engine (later phase)
-backend/              Node.js + TypeScript service
-database/             Schema documentation and migrations (later phase)
-infrastructure/       docker-compose and deployment assets
+android-app/          Android application (Compose UI, ViewModels, JNI, OkHttp, Socket.IO)
+native-audio/         C++ Oboe engine (RecordingSession, PlaybackSession, effects, WavWriter)
+backend/              Node.js + TypeScript service (Express 5, Socket.IO, Mongoose)
+database/             Schema documentation and Mongoose models
+infrastructure/       Azure Container Apps deployment, Dockerfile, docker-compose
 docs/
-  architecture/       system architecture diagram
-  audio/              audio-flow diagram
-  websocket/          room and event-flow diagram
-  spin/               spin state-machine diagram
-tests/                cross-cutting Android/native/e2e tests (later phase)
-TASKS.md              requirement checklist
-ARCHITECTURE.md       system design
+  architecture/       System architecture, trade-offs, and assumptions
+  audio/              Audio capture/playback flow, real-time safety, and DSP effects
+  websocket/          Socket.IO event flow, presence, and payload contracts
+  spin/               Spin wheel state machine and lifecycle specification
+  openapi.yaml        OpenAPI 3.0 specification for all REST endpoints
+  deployment.md       Azure deployment, secrets handling, and rollback runbook
+TASKS.md              Requirement checklist and verification rubric
+ARCHITECTURE.md       System design and data model
 ```
 
 Backend unit and integration tests live in `backend/tests`, close to the code they cover. The
@@ -332,28 +337,41 @@ Every error response uses one envelope, including the `/ready` 503:
 
 ## Running tests
 
+### Backend tests
+
 ```bash
 cd backend
-npm test
+npm test                 # 60 unit tests, no database needed
+npm run test:integration # 155 integration tests, requires running MongoDB instance
+npm run typecheck        # TypeScript typecheck
+npm run lint             # ESLint
+npm run build            # Production TypeScript build
 ```
 
-The suites are split so the fast one has no external dependencies:
+- **Unit (60 tests in 10 files)**: Covers `/health`, `/ready` (both branches), domain errors, Zod request validations, in-memory SpinScheduler (15 tests), SpinRecovery (9 tests), and WebSocket handlers.
+- **Integration (155 tests in 8 files)**: Validates Mongoose schema constraints, compound/partial indexes, atomic CAS operations, concurrent joins/spins (SP-15), and correlation logging (BA-10).
+
+### Android tests & verification
 
 ```bash
-npm test               # 60 unit tests, no database needed
-npm run test:integration   # 154 integration tests, needs MongoDB
-npm run test:all           # both
+cd android-app
+./gradlew testDebugUnitTest  # 98 unit tests across JVM reducers, repositories, and network clients
+./gradlew assembleDebug      # Builds debug APK and compiles native C++ libraries for 3 ABIs
+./gradlew lintDebug          # Android lint analysis (0 errors)
 ```
 
-**Unit** covers `/health`, both `/ready` branches, 404 handling, the error envelope, config validation,
-request-validation schemas, domain-error mapping and a Socket.IO connection smoke test — the Express app is built without a database connection, and
-readiness is tested against a stubbed connection state.
+- **Unit (98 tests, 0 failures)**: Covers `RecordingReducerTest` (26), `DraftRepositoryTest` (13), `PlaybackReducerTest` (12), `RoomApiClientTest` (10), `RoomSocketClientTest` (9), `SpinReducerTest` (8), `NativeContractTest` (7), `RecordingCleanupTest` (7), `RoomUiStateTest` (3), `AudioStatusMessageTest` (3).
+- **Compilation**: Gradle CMake integration cross-compiles native audio libraries for `arm64-v8a`, `armeabi-v7a`, and `x86_64`.
 
-**Integration** runs against a real MongoDB, using a separate `roxstar_test` database (override with
-`MONGODB_TEST_URI`) that is cleared between tests and dropped at the end, so development data is never
-touched. It covers schema validation, every unique and partial index, the repository layer, and a
-concurrency tests proving that simultaneous spin creations, room joins and draft shares each produce
-exactly one row.
+### Native audio tests (Host C++)
+
+```bash
+cd native-audio/tests/build
+./native_audio_tests.exe     # 75 host C++ tests
+```
+
+- **Host C++ (75 tests, 0 failures)**: Tests `RingBuffer` lock-free circular buffer (7), `WavWriter` (8), `WavReader` (13), `PlaybackBuffer` (8), `RecordingSession` lifecycle and cancellation (7), effect factory (5), and DSP implementations for `EchoEffect` (6), `ReverbEffect` (6), and `PitchShiftEffect` (9), plus end-to-end processing pipeline integration (5).
+
 
 ## Building for production
 
