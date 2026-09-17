@@ -184,6 +184,21 @@ Status AudioEngine::stopRecording() {
     return mRecording.stopAndFinalize();
 }
 
+void AudioEngine::cancelRecording() {
+    // Step 1: stop the Oboe input stream (same pattern as stopRecording).
+    {
+        std::lock_guard<std::mutex> guard(mLock);
+        if (mStream != nullptr &&
+            mState.load(std::memory_order_relaxed) == static_cast<int32_t>(EngineState::Started)) {
+            mStream->requestStop();
+            mState.store(static_cast<int32_t>(EngineState::Stopped), std::memory_order_relaxed);
+        }
+    }
+
+    // Step 2: drain and join the writer thread, then delete the partial file.
+    mRecording.cancelAndDiscard();
+}
+
 Status AudioEngine::close() {
     std::lock_guard<std::mutex> guard(mLock);
 
@@ -193,6 +208,7 @@ Status AudioEngine::close() {
     if (mRecording.isRecording()) {
         mRecording.cancelAndDiscard();
     }
+    mPlayback.close();
 
     if (mStream == nullptr) {
         // Never opened, or already closed.

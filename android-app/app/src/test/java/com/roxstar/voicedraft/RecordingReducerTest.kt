@@ -162,4 +162,49 @@ class RecordingReducerTest {
         val next = RecordingReducer.progress(previous, 99, 0.9f)
         assertEquals(previous, next)
     }
+
+    // --- cancelRequested ---
+
+    @Test
+    fun cancelRequested_whileRecording_movesToCancelling() {
+        val next = RecordingReducer.cancelRequested(RecordingUiState(phase = RecordingPhase.RECORDING))
+        assertEquals(RecordingPhase.CANCELLING, next?.phase)
+    }
+
+    @Test
+    fun cancelRequested_whileRecording_resetsCounters() {
+        val previous = RecordingUiState(phase = RecordingPhase.RECORDING, elapsedSeconds = 12, peakLevel = 0.7f)
+        val next = RecordingReducer.cancelRequested(previous)
+        assertEquals(0, next?.elapsedSeconds)
+        assertEquals(0f, next?.peakLevel)
+    }
+
+    @Test
+    fun cancelRequested_whileIdle_isIgnored() {
+        assertNull(RecordingReducer.cancelRequested(RecordingUiState(phase = RecordingPhase.IDLE)))
+    }
+
+    @Test
+    fun cancelRequested_whileSaving_isIgnored() {
+        assertNull(RecordingReducer.cancelRequested(RecordingUiState(phase = RecordingPhase.SAVING)))
+    }
+
+    // --- cancelSucceeded ---
+
+    @Test
+    fun cancelSucceeded_returnsToIdleWithCleanState() {
+        val previous = RecordingUiState(
+            phase = RecordingPhase.CANCELLING,
+            elapsedSeconds = 5,
+            peakLevel = 0.4f,
+            savedFileName = "stale.wav",
+            errorMessage = "stale error",
+        )
+        val next = RecordingReducer.cancelSucceeded(previous)
+        assertEquals(RecordingPhase.IDLE, next.phase)
+        assertEquals(0, next.elapsedSeconds)
+        assertEquals(0f, next.peakLevel)
+        assertNull(next.savedFileName)
+        assertNull(next.errorMessage)
+    }
 }

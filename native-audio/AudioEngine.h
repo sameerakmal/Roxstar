@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 
+#include "PlaybackSession.h"
 #include "RecordingSession.h"
 #include "Status.h"
 #include "src/effects/IEffect.h"
@@ -69,8 +70,9 @@ enum ConfigIndex : int32_t {
  * RecordingSession (ring buffer + WAV writer thread) whenever recording is
  * active. Phase 5 adds effects: onAudioReady() applies the selected effect
  * (see RecordingSession::applyEffect) to the mono buffer before it reaches
- * the ring buffer, so the saved WAV contains the processed signal. Playback
- * remains out of scope.
+ * the ring buffer, so the saved WAV contains the processed signal. Phase 6
+ * adds playback: a PlaybackSession owns its own independent Oboe OUTPUT
+ * stream (see below) — it does not touch mStream or onAudioReady at all.
  */
 class AudioEngine : public oboe::AudioStreamDataCallback,
                     public oboe::AudioStreamErrorCallback {
@@ -108,7 +110,29 @@ public:
      */
     Status stopRecording();
 
+    /**
+     * Stops any in-progress recording and deletes the partial WAV file.
+     * Equivalent to stopRecording() but discards instead of finalizing.
+     * Blocking; call off the UI thread.
+     */
+    void cancelRecording();
+
     std::string lastRecordingPath() const { return mRecording.lastPath(); }
+
+    /**
+     * Loads `path` and opens the playback output stream. Blocking (file
+     * I/O); call off the UI thread. Safe to call again with a different
+     * path at any time, including mid-playback.
+     */
+    Status preparePlayback(const std::string &path) { return mPlayback.prepare(path); }
+    Status startPlayback() { return mPlayback.play(); }
+    Status pausePlayback() { return mPlayback.pause(); }
+    Status stopPlayback() { return mPlayback.stop(); }
+
+    /** Fills `out` with PlaybackConfigIndex::kIdxCount values describing playback. */
+    void playbackSnapshot(int64_t *out, int32_t count) const { mPlayback.snapshot(out, count); }
+
+    const char *lastPlaybackResultText() const { return mPlayback.lastResultText(); }
 
     /** Fills `out` with kIdxCount values describing the live stream. */
     void snapshot(int64_t *out, int32_t count);
@@ -148,6 +172,10 @@ private:
     // Owns its own synchronization; pushSamples() is real-time safe. Mutated
     // (start/stop) only from the JNI thread, same as mStream.
     RecordingSession mRecording;
+
+    // Owns its own Oboe output stream and synchronization, entirely
+    // independent of mStream/mRecording above.
+    PlaybackSession mPlayback;
 };
 
 }  // namespace roxstar

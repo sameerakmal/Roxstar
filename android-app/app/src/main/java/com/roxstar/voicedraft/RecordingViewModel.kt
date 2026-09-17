@@ -18,8 +18,11 @@ import kotlinx.coroutines.withContext
 
 class RecordingViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val engine = AudioEngine()
+    // Shared with PlaybackViewModel via AudioEngineHolder — do not call release() here.
+    // See AudioEngineHolder for the design rationale.
+    private val engine = AudioEngineHolder.get(application)
     private val draftsDir = File(application.filesDir, "drafts").apply { mkdirs() }
+    private val draftRepo = DraftRepository(draftsDir)
 
     private val _uiState = MutableStateFlow(RecordingUiState())
     val uiState: StateFlow<RecordingUiState> = _uiState.asStateFlow()
@@ -27,7 +30,10 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     private var pollingJob: Job? = null
 
     init {
-        viewModelScope.launch(Dispatchers.IO) { RecordingCleanup.removeOrphaned(draftsDir) }
+        viewModelScope.launch(Dispatchers.IO) {
+            RecordingCleanup.removeOrphaned(draftsDir)
+            draftRepo.reconcileOrphans()
+        }
     }
 
     fun onPermissionResult(granted: Boolean, canShowRationale: Boolean, hasAskedBefore: Boolean) {
@@ -65,7 +71,21 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
             val status = withContext(Dispatchers.IO) { engine.stopRecording() }
             _uiState.update {
                 if (status == AudioStatus.OK) {
-                    RecordingReducer.stopSucceeded(it, File(engine.lastRecordingPath()).name)
+                    val wavPath = engine.lastRecordingPath()
+                    val wavFile = java.io.File(wavPath)
+                    // Persist Draft metadata immediately after a successful stop.
+                    withContext(Dispatchers.IO) {
+                        val draft = Draft(
+                            id = wavFile.nameWithoutExtension,
+                            name = DraftRepository.defaultName(System.currentTimeMillis()),
+                            createdAt = System.currentTimeMillis(),
+                            durationMs = DraftRepository.wavDurationMs(wavFile),
+                            effect = it.selectedEffect,
+                            filePath = wavPath,
+                        )
+                        draftRepo.saveDraft(draft)
+                    }
+                    RecordingReducer.stopSucceeded(it, wavFile.name)
                 } else {
                     RecordingReducer.stopFailed(it, status.toUserMessage())
                 }
@@ -81,6 +101,17 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun stopIfRecording() {
         if (_uiState.value.phase == RecordingPhase.RECORDING) stopRecording()
+    }
+
+    fun cancelRecording() {
+        val next = RecordingReducer.cancelRequested(_uiState.value) ?: return
+        _uiState.value = next
+        pollingJob?.cancel()
+
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { engine.cancelRecording() }
+            _uiState.update { RecordingReducer.cancelSucceeded(it) }
+        }
     }
 
     private fun startPolling() {
@@ -99,12 +130,14 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
-        // Safety net for an abnormal teardown that skipped stopIfRecording():
-        // AudioEngine.close() cancels and discards any still-active recording
-        // rather than leaving its writer thread behind.
+        // Safety net: if the activity is torn down while recording, stop and discard
+        // rather than leak the writer thread. AudioEngineHolder keeps the engine alive
+        // for PlaybackViewModel; we do NOT call release() here.
         pollingJob?.cancel()
-        engine.close()
-        engine.release()
+        if (_uiState.value.phase == RecordingPhase.RECORDING ||
+            _uiState.value.phase == RecordingPhase.SAVING) {
+            engine.cancelRecording()
+        }
         super.onCleared()
     }
 

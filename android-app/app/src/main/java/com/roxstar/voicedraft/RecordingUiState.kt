@@ -2,7 +2,7 @@ package com.roxstar.voicedraft
 
 enum class PermissionState { UNKNOWN, GRANTED, DENIED, PERMANENTLY_DENIED }
 
-enum class RecordingPhase { IDLE, RECORDING, SAVING, SAVED, ERROR }
+enum class RecordingPhase { IDLE, RECORDING, SAVING, SAVED, CANCELLING, ERROR }
 
 data class RecordingUiState(
     val permission: PermissionState = PermissionState.UNKNOWN,
@@ -71,6 +71,22 @@ object RecordingReducer {
 
     fun stopFailed(current: RecordingUiState, message: String): RecordingUiState =
         current.copy(phase = RecordingPhase.ERROR, errorMessage = message)
+
+    /** Null means the request is ignored (nothing is currently recording). */
+    fun cancelRequested(current: RecordingUiState): RecordingUiState? {
+        if (current.phase != RecordingPhase.RECORDING) return null
+        return current.copy(phase = RecordingPhase.CANCELLING, elapsedSeconds = 0, peakLevel = 0f)
+    }
+
+    /** Returns to IDLE so the user can start a fresh recording immediately. */
+    fun cancelSucceeded(current: RecordingUiState): RecordingUiState =
+        current.copy(
+            phase = RecordingPhase.IDLE,
+            elapsedSeconds = 0,
+            peakLevel = 0f,
+            savedFileName = null,
+            errorMessage = null,
+        )
 
     /** Ignored once a stop has been requested, so a late poll tick can't undo it. */
     fun progress(current: RecordingUiState, elapsedSeconds: Int, peakLevel: Float): RecordingUiState {

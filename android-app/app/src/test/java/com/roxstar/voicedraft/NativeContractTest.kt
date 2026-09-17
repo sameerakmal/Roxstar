@@ -19,6 +19,7 @@ class NativeContractTest {
     private val audioEngineHeader by header("AudioEngine.h")
     private val recordingSessionHeader by header("RecordingSession.h")
     private val effectHeader by header("src/effects/IEffect.h")
+    private val playbackSessionHeader by header("PlaybackSession.h")
 
     @Test
     fun engineStateCodesMatchNativeHeader() {
@@ -101,6 +102,35 @@ class NativeContractTest {
             "kIdxCount",
         )
         assertEquals(expected, enumBody(audioEngineHeader, "ConfigIndex").map { it.first })
+    }
+
+    @Test
+    fun playbackStateCodesMatchNativeHeader() {
+        val native = parseEnum(playbackSessionHeader, "PlaybackState")
+        assertEquals(PlaybackState.entries.size, native.size)
+        PlaybackState.entries.forEach { kotlinEntry ->
+            val nativeName = native.keys.first { screamingSnake(it) == kotlinEntry.name }
+            assertEquals(
+                "PlaybackState.${kotlinEntry.name} disagrees with native $nativeName",
+                native.getValue(nativeName),
+                kotlinEntry.code,
+            )
+        }
+    }
+
+    @Test
+    fun playbackConfigIndexLayoutMatchesNativeHeader() {
+        // The order AudioEngine.kt assumes when decoding nativeGetPlaybackConfig().
+        val expected = listOf(
+            "kIdxState",
+            "kIdxSampleRate",
+            "kIdxChannelCount",
+            "kIdxFrameCount",
+            "kIdxFramePosition",
+            "kIdxLastResult",
+            "kIdxCount",
+        )
+        assertEquals(expected, enumBody(playbackSessionHeader, "PlaybackConfigIndex").map { it.first })
     }
 
     // --- helpers ---

@@ -171,4 +171,80 @@ Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetOboeVersion(JNIEnv *env,
     return env->NewStringUTF(OBOE_VERSION_TEXT);
 }
 
+// path is an absolute path to an existing WAV file (a Draft's fileLocation).
+// Blocking (file I/O + opening the output stream); callers must invoke this
+// off the UI thread.
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativePreparePlayback(JNIEnv *env,
+                                                                     jobject /* thiz */,
+                                                                     jlong handle,
+                                                                     jstring path) {
+    auto *engine = asEngine(handle);
+    if (engine == nullptr) {
+        return toJint(roxstar::Status::NoEngine);
+    }
+    const char *pathChars = env->GetStringUTFChars(path, nullptr);
+    if (pathChars == nullptr) {
+        return toJint(roxstar::Status::FileError);  // OutOfMemoryError is already pending.
+    }
+    const std::string pathStr(pathChars);
+    env->ReleaseStringUTFChars(path, pathChars);
+    return toJint(engine->preparePlayback(pathStr));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeStartPlayback(JNIEnv * /*env*/,
+                                                                   jobject /* thiz */,
+                                                                   jlong handle) {
+    auto *engine = asEngine(handle);
+    return engine == nullptr ? toJint(roxstar::Status::NoEngine) : toJint(engine->startPlayback());
+}
+
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativePausePlayback(JNIEnv * /*env*/,
+                                                                   jobject /* thiz */,
+                                                                   jlong handle) {
+    auto *engine = asEngine(handle);
+    return engine == nullptr ? toJint(roxstar::Status::NoEngine) : toJint(engine->pausePlayback());
+}
+
+JNIEXPORT jint JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeStopPlayback(JNIEnv * /*env*/,
+                                                                  jobject /* thiz */,
+                                                                  jlong handle) {
+    auto *engine = asEngine(handle);
+    return engine == nullptr ? toJint(roxstar::Status::NoEngine) : toJint(engine->stopPlayback());
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeGetPlaybackConfig(JNIEnv *env,
+                                                                       jobject /* thiz */,
+                                                                       jlong handle) {
+    constexpr auto kCount = static_cast<int32_t>(roxstar::PlaybackConfigIndex::kIdxCount);
+    int64_t values[kCount] = {0};
+
+    if (auto *engine = asEngine(handle); engine != nullptr) {
+        engine->playbackSnapshot(values, kCount);
+    }
+
+    jlongArray out = env->NewLongArray(kCount);
+    if (out == nullptr) {
+        return nullptr;  // OutOfMemoryError is already pending.
+    }
+    env->SetLongArrayRegion(out, 0, kCount, reinterpret_cast<const jlong *>(values));
+    return out;
+}
+
+// Stops any in-progress recording and deletes the partial WAV file.
+// Blocking; callers must invoke this off the UI thread.
+JNIEXPORT void JNICALL
+Java_com_roxstar_voicedraft_NativeAudioBridge_nativeCancelRecording(JNIEnv * /*env*/,
+                                                                    jobject /* thiz */,
+                                                                    jlong handle) {
+    auto *engine = asEngine(handle);
+    if (engine != nullptr) {
+        engine->cancelRecording();
+    }
+}
+
 }  // extern "C"

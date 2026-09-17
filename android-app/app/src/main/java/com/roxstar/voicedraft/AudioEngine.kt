@@ -28,7 +28,8 @@ enum class AudioStatus(val code: Int) {
     ALREADY_RECORDING(-8),
     NOT_RECORDING(-9),
     FILE_ERROR(-10),
-    INVALID_EFFECT(-11);
+    INVALID_EFFECT(-11),
+    PAUSE_FAILED(-12);
 
     companion object {
         fun from(code: Int): AudioStatus = entries.firstOrNull { it.code == code } ?: NO_ENGINE
@@ -55,6 +56,44 @@ enum class Effect(val code: Int) {
     REVERB(2),
     PITCH_SHIFT(3),
 }
+
+/** Mirrors roxstar::PlaybackState in native-audio/PlaybackSession.h. */
+enum class PlaybackState(val code: Int) {
+    IDLE(0),
+    PLAYING(1),
+    PAUSED(2),
+    STOPPED(3),
+    ERROR(4);
+
+    companion object {
+        fun from(code: Long): PlaybackState =
+            entries.firstOrNull { it.code == code.toInt() } ?: IDLE
+    }
+}
+
+/** Mirrors PlaybackConfigIndex in native-audio/PlaybackSession.h. */
+enum class PlaybackConfigIndex(val idx: Int) {
+    STATE(0),
+    SAMPLE_RATE(1),
+    CHANNEL_COUNT(2),
+    FRAME_COUNT(3),
+    FRAME_POSITION(4),
+    LAST_RESULT(5);
+
+    companion object {
+        /** Total number of values returned by nativeGetPlaybackConfig(). */
+        const val IDX_COUNT = 6
+    }
+}
+
+/** Snapshot of the Oboe output stream serving playback. */
+data class PlaybackConfig(
+    val state: PlaybackState,
+    val sampleRate: Int,
+    val channelCount: Int,
+    val frameCount: Long,
+    val framePosition: Long,
+)
 
 /** The configuration Oboe actually granted, read back from the open stream. */
 data class AudioConfig(
@@ -119,6 +158,37 @@ class AudioEngine {
 
     fun lastRecordingPath(): String =
         if (handle == 0L) "" else NativeAudioBridge.nativeGetLastRecordingPath(handle)
+
+    /** [path] must be an absolute path to an existing, fully-written WAV file. */
+    fun preparePlayback(path: String): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativePreparePlayback(it, path)) }
+
+    fun startPlayback(): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativeStartPlayback(it)) }
+
+    fun pausePlayback(): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativePausePlayback(it)) }
+
+    fun stopPlayback(): AudioStatus =
+        withHandle { AudioStatus.from(NativeAudioBridge.nativeStopPlayback(it)) }
+
+    fun playbackConfig(): PlaybackConfig {
+        if (handle == 0L) return EMPTY_PLAYBACK_CONFIG
+        val v = NativeAudioBridge.nativeGetPlaybackConfig(handle)
+        if (v.size < PlaybackConfigIndex.IDX_COUNT) return EMPTY_PLAYBACK_CONFIG
+        return PlaybackConfig(
+            state = PlaybackState.from(v[PlaybackConfigIndex.STATE.idx]),
+            sampleRate = v[PlaybackConfigIndex.SAMPLE_RATE.idx].toInt(),
+            channelCount = v[PlaybackConfigIndex.CHANNEL_COUNT.idx].toInt(),
+            frameCount = v[PlaybackConfigIndex.FRAME_COUNT.idx],
+            framePosition = v[PlaybackConfigIndex.FRAME_POSITION.idx],
+        )
+    }
+
+    /** Blocking: aborts the recording and deletes the partial WAV file. Call off the main thread. */
+    fun cancelRecording() {
+        if (handle != 0L) NativeAudioBridge.nativeCancelRecording(handle)
+    }
 
     fun release() {
         if (handle != 0L) {
@@ -197,6 +267,14 @@ class AudioEngine {
             recordingState = RecordingState.IDLE,
             recordingFramesCaptured = 0,
             recordingOverrunFrames = 0,
+        )
+
+        val EMPTY_PLAYBACK_CONFIG = PlaybackConfig(
+            state = PlaybackState.IDLE,
+            sampleRate = 0,
+            channelCount = 0,
+            frameCount = 0L,
+            framePosition = 0L,
         )
 
         // Numeric values come from oboe/Definitions.h.

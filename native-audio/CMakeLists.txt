@@ -10,12 +10,17 @@ find_package(oboe REQUIRED CONFIG)
 
 # Phase 3 adds the recording pipeline: ring buffer, WAV writer and the writer
 # thread that drains it. Phase 5 adds the effects applied to that pipeline
-# (native-audio/src/effects/). Playback remains out of scope.
+# (native-audio/src/effects/). Phase 6 adds playback: WavReader
+# (native-audio/src/) plus PlaybackSession, which owns its own Oboe output
+# stream independent of the recording input stream.
 add_library(native-audio SHARED
     jni_bridge.cpp
     AudioEngine.cpp
     RecordingSession.cpp
+    PlaybackSession.cpp
     WavWriter.cpp
+    src/WavReader.cpp
+    src/PlaybackBuffer.cpp
     src/effects/IEffect.cpp
     src/effects/EchoEffect.cpp
     src/effects/ReverbEffect.cpp

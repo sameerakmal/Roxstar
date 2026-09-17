@@ -78,6 +78,7 @@ tasks.withType<Test>().configureEach {
         rootProject.file("../native-audio/Status.h"),
         rootProject.file("../native-audio/AudioEngine.h"),
         rootProject.file("../native-audio/RecordingSession.h"),
+        rootProject.file("../native-audio/PlaybackSession.h"),
         rootProject.file("../native-audio/src/effects/IEffect.h"),
     )
         .withPropertyName("nativeAudioContractHeaders")

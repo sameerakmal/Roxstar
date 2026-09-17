@@ -63,4 +63,36 @@ object NativeAudioBridge {
      * being cast into undefined native enum territory.
      */
     external fun nativeSetEffect(handle: Long, effectCode: Int): Int
+
+    // ── Playback ────────────────────────────────────────────────────────────
+
+    /**
+     * Loads [path] and opens the Oboe output stream. Blocking (file I/O +
+     * stream open); callers must invoke this off the main thread. Safe to
+     * call again with a different path at any time.
+     */
+    external fun nativePreparePlayback(handle: Long, path: String): Int
+
+    /** Starts (or resumes) playback. */
+    external fun nativeStartPlayback(handle: Long): Int
+
+    /** Pauses playback; position is preserved. */
+    external fun nativePausePlayback(handle: Long): Int
+
+    /** Stops and rewinds to the start. */
+    external fun nativeStopPlayback(handle: Long): Int
+
+    /**
+     * Returns a [LongArray] of [PlaybackConfigIndex.IDX_COUNT] values
+     * describing the current playback state.
+     */
+    external fun nativeGetPlaybackConfig(handle: Long): LongArray
+
+    // ── Cancel recording ────────────────────────────────────────────────────
+
+    /**
+     * Stops any in-progress recording and deletes the partial WAV file.
+     * Blocking; callers must invoke this off the main thread.
+     */
+    external fun nativeCancelRecording(handle: Long)
 }

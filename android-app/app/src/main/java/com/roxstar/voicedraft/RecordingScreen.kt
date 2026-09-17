@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,7 +50,10 @@ import java.util.Locale
 private const val RECORD_AUDIO_PERMISSION = Manifest.permission.RECORD_AUDIO
 
 @Composable
-fun RecordingScreen(viewModel: RecordingViewModel = viewModel()) {
+fun RecordingScreen(
+    viewModel: RecordingViewModel = viewModel(),
+    onNavigateToDrafts: () -> Unit = {},
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val activity = LocalActivity.current ?: return
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -98,7 +102,9 @@ fun RecordingScreen(viewModel: RecordingViewModel = viewModel()) {
             }
         },
         onStopTap = viewModel::stopRecording,
+        onCancelTap = viewModel::cancelRecording,
         onEffectSelected = viewModel::selectEffect,
+        onNavigateToDrafts = onNavigateToDrafts,
         onOpenSettings = {
             activity.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
@@ -108,12 +114,15 @@ fun RecordingScreen(viewModel: RecordingViewModel = viewModel()) {
     )
 }
 
+
 @Composable
 private fun RecordingScreenContent(
     uiState: RecordingUiState,
     onRecordTap: () -> Unit,
     onStopTap: () -> Unit,
+    onCancelTap: () -> Unit,
     onEffectSelected: (Effect) -> Unit,
+    onNavigateToDrafts: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -157,10 +166,38 @@ private fun RecordingScreenContent(
                 phase = uiState.phase,
                 enabled = uiState.permission != PermissionState.PERMANENTLY_DENIED,
                 onClick = if (uiState.phase == RecordingPhase.RECORDING) onStopTap else onRecordTap,
-                modifier = Modifier.padding(top = 32.dp, bottom = 20.dp),
+                modifier = Modifier.padding(top = 32.dp, bottom = 8.dp),
             )
 
+            // Cancel — only shown while recording; secondary to Stop.
+            if (uiState.phase == RecordingPhase.RECORDING) {
+                TextButton(
+                    onClick = onCancelTap,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                ) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                // Reserve the same vertical space so the layout doesn't jump.
+                androidx.compose.foundation.layout.Spacer(
+                    modifier = Modifier.height(48.dp + 12.dp)
+                )
+            }
+
             StatusMessage(uiState, onOpenSettings)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            TextButton(
+                onClick = onNavigateToDrafts,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Text(
+                    text = if (uiState.phase == RecordingPhase.SAVED) "View in Drafts ›"
+                    else "My Drafts ›",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
     }
 }
@@ -280,7 +317,8 @@ private fun statusLabel(phase: RecordingPhase) = when (phase) {
     RecordingPhase.RECORDING -> "Recording"
     RecordingPhase.SAVING -> "Saving…"
     RecordingPhase.SAVED -> "Saved"
-    RecordingPhase.ERROR -> "Couldn't complete recording"
+    RecordingPhase.CANCELLING -> "Cancelling…"
+    RecordingPhase.ERROR -> "Couldn’t complete recording"
 }
 
 private fun formatDuration(totalSeconds: Int): String =
