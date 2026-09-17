@@ -13,8 +13,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.roxstar.voicedraft.network.RoomApiClient
+import com.roxstar.voicedraft.network.SharedDraftDto
+
 /**
- * Manages the local Draft list and orchestrates playback of a selected draft.
+ * Manages the local Draft list and orchestrates playback of a selected draft,
+ * as well as sharing drafts with backend rooms via REST API.
  *
  * Observes [PlaybackViewModel.uiState] to keep [DraftUiState.playingDraftId] in sync
  * so the Draft list can show which item is currently playing without reaching into
@@ -23,12 +27,14 @@ import kotlinx.coroutines.withContext
 class DraftViewModel(
     application: Application,
     private val playbackViewModel: PlaybackViewModel,
+    private val roomApiClient: RoomApiClient = RoomApiClient(),
 ) : AndroidViewModel(application) {
 
     // Secondary constructor for ViewModelProvider (no DI framework required).
     constructor(application: Application) : this(
         application,
         PlaybackViewModel(application),
+        RoomApiClient(),
     )
 
     private val draftRepo = DraftRepository(
@@ -86,6 +92,54 @@ class DraftViewModel(
     /** Stops the currently playing draft. */
     fun stop() {
         playbackViewModel.stop()
+    }
+
+    /**
+     * Shares [draft] into the specified backend [roomId] on behalf of [userId].
+     * Updates [DraftUiState.sharingDraftId] while in progress and sets [DraftUiState.shareMessage]
+     * with the result or error message.
+     */
+    fun shareDraft(
+        draft: Draft,
+        roomId: String,
+        userId: String,
+        onComplete: ((Result<SharedDraftDto>) -> Unit)? = null,
+    ) {
+        if (roomId.isBlank()) {
+            _uiState.update { it.copy(shareMessage = "Room ID is required") }
+            return
+        }
+        if (userId.isBlank()) {
+            _uiState.update { it.copy(shareMessage = "User ID is required") }
+            return
+        }
+
+        _uiState.update { it.copy(sharingDraftId = draft.id, shareMessage = null) }
+
+        viewModelScope.launch {
+            val result = roomApiClient.createAndShareDraft(
+                roomId = roomId.trim(),
+                draft = draft,
+                userId = userId.trim(),
+            )
+            _uiState.update { current ->
+                current.copy(
+                    sharingDraftId = null,
+                    shareMessage = if (result.isSuccess) {
+                        "Shared draft \"${draft.name}\" to room"
+                    } else {
+                        val err = result.exceptionOrNull()
+                        "Share failed: ${err?.message ?: "Unknown error"}"
+                    },
+                )
+            }
+            onComplete?.invoke(result)
+        }
+    }
+
+    /** Clears the current status/error share message. */
+    fun clearShareMessage() {
+        _uiState.update { it.copy(shareMessage = null) }
     }
 
     override fun onCleared() {

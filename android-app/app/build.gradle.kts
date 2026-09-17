@@ -19,6 +19,9 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        val backendBaseUrl = project.findProperty("BACKEND_BASE_URL") as? String ?: "http://10.0.2.2:3000"
+        buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
+
         ndk {
             // D11 — arm64-v8a and armeabi-v7a for real devices, x86_64 for the emulator.
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -51,6 +54,7 @@ android {
         compose = true
         // Exposes the Oboe AAR's prefab package to CMake via find_package(oboe).
         prefab = true
+        buildConfig = true
     }
 
     // D2 — native sources live in native-audio/ at the repo root, not under app/src.
@@ -89,6 +93,9 @@ dependencies {
     // Native audio I/O. Consumed by native-audio/CMakeLists.txt through prefab.
     implementation("com.google.oboe:oboe:1.9.3")
 
+    // Networking (Phase 6B)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
@@ -101,6 +108,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.03.01"))

@@ -21,13 +21,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +41,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -55,9 +62,23 @@ fun DraftListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val playbackUiState by viewModel.playbackUiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    var draftToShare by remember { mutableStateOf<Draft?>(null) }
+    var roomIdInput by remember { mutableStateOf("") }
+    var userIdInput by remember { mutableStateOf("") }
 
     // Reload whenever the screen becomes visible (handles new recordings added by RecordingScreen).
     LaunchedEffect(Unit) { viewModel.loadDrafts() }
+
+    // Show feedback messages when share attempts complete.
+    LaunchedEffect(uiState.shareMessage) {
+        val msg = uiState.shareMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearShareMessage()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -77,7 +98,8 @@ fun DraftListScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -97,12 +119,60 @@ fun DraftListScreen(
                     DraftList(
                         drafts = uiState.drafts,
                         playingDraftId = uiState.playingDraftId,
+                        sharingDraftId = uiState.sharingDraftId,
                         playback = playbackUiState,
                         onPlay = { viewModel.play(it) },
                         onStop = { viewModel.stop() },
                         onDelete = { viewModel.deleteDraft(it.id) },
+                        onShare = { draftToShare = it },
                     )
                 }
+            }
+
+            // Share Draft dialog
+            draftToShare?.let { draft ->
+                AlertDialog(
+                    onDismissRequest = { draftToShare = null },
+                    title = { Text("Share Draft with Room") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                text = "Share \"${draft.name}\" to a backend room via REST API.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            OutlinedTextField(
+                                value = roomIdInput,
+                                onValueChange = { roomIdInput = it },
+                                label = { Text("Room ID (24-hex ObjectId)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = userIdInput,
+                                onValueChange = { userIdInput = it },
+                                label = { Text("User ID (24-hex ObjectId)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.shareDraft(draft, roomIdInput, userIdInput)
+                                draftToShare = null
+                            },
+                            enabled = roomIdInput.isNotBlank() && userIdInput.isNotBlank(),
+                        ) {
+                            Text("Share")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { draftToShare = null }) {
+                            Text("Cancel")
+                        }
+                    },
+                )
             }
         }
     }
@@ -146,10 +216,12 @@ private fun EmptyDraftList(modifier: Modifier = Modifier) {
 private fun DraftList(
     drafts: List<DraftWithStatus>,
     playingDraftId: String?,
+    sharingDraftId: String?,
     playback: PlaybackUiState,
     onPlay: (Draft) -> Unit,
     onStop: () -> Unit,
     onDelete: (Draft) -> Unit,
+    onShare: (Draft) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -161,10 +233,12 @@ private fun DraftList(
             DraftRow(
                 draftWithStatus = draftWithStatus,
                 isPlaying = draftWithStatus.draft.id == playingDraftId,
+                isSharing = draftWithStatus.draft.id == sharingDraftId,
                 playback = playback,
                 onPlay = { onPlay(draftWithStatus.draft) },
                 onStop = onStop,
                 onDelete = { onDelete(draftWithStatus.draft) },
+                onShare = { onShare(draftWithStatus.draft) },
             )
         }
     }
@@ -174,10 +248,12 @@ private fun DraftList(
 private fun DraftRow(
     draftWithStatus: DraftWithStatus,
     isPlaying: Boolean,
+    isSharing: Boolean,
     playback: PlaybackUiState,
     onPlay: () -> Unit,
     onStop: () -> Unit,
     onDelete: () -> Unit,
+    onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val draft = draftWithStatus.draft
@@ -267,6 +343,31 @@ private fun DraftRow(
                             EffectBadge(draft.effect)
                         }
                     }
+                }
+            }
+
+            // Share button — disabled if WAV is missing or share in-flight
+            IconButton(
+                onClick = onShare,
+                enabled = !wavMissing && !isSharing,
+                modifier = Modifier.size(36.dp),
+            ) {
+                if (isSharing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text(
+                        text = "↗",
+                        fontSize = 18.sp,
+                        color = if (wavMissing) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
 
