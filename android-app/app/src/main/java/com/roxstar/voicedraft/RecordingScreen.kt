@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,6 +54,7 @@ private const val RECORD_AUDIO_PERMISSION = Manifest.permission.RECORD_AUDIO
 fun RecordingScreen(
     viewModel: RecordingViewModel = viewModel(),
     onNavigateToDrafts: () -> Unit = {},
+    onNavigateToRoom: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val activity = LocalActivity.current ?: return
@@ -105,6 +107,7 @@ fun RecordingScreen(
         onCancelTap = viewModel::cancelRecording,
         onEffectSelected = viewModel::selectEffect,
         onNavigateToDrafts = onNavigateToDrafts,
+        onNavigateToRoom = onNavigateToRoom,
         onOpenSettings = {
             activity.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
@@ -123,6 +126,7 @@ private fun RecordingScreenContent(
     onCancelTap: () -> Unit,
     onEffectSelected: (Effect) -> Unit,
     onNavigateToDrafts: () -> Unit,
+    onNavigateToRoom: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -188,15 +192,22 @@ private fun RecordingScreenContent(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            TextButton(
-                onClick = onNavigateToDrafts,
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             ) {
-                Text(
-                    text = if (uiState.phase == RecordingPhase.SAVED) "View in Drafts ›"
-                    else "My Drafts ›",
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                TextButton(onClick = onNavigateToDrafts) {
+                    Text(
+                        text = if (uiState.phase == RecordingPhase.SAVED) "View in Drafts ›" else "My Drafts ›",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                TextButton(onClick = onNavigateToRoom) {
+                    Text(
+                        text = "Voice Rooms ›",
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
             }
         }
     }

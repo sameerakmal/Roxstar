@@ -7,13 +7,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.roxstar.voicedraft.room.RoomScreen
 import com.roxstar.voicedraft.ui.theme.VoiceDraftTheme
 
 /**
  * Single-activity host.
  *
  * Navigation is a simple enum-based screen switch — no NavGraph required
- * for two screens. If more screens are added, migrate to NavHost.
+ * for three screens.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,8 +26,13 @@ class MainActivity : ComponentActivity() {
                 when (currentScreen) {
                     Screen.RECORDING -> RecordingScreen(
                         onNavigateToDrafts = { currentScreen = Screen.DRAFTS },
+                        onNavigateToRoom = { currentScreen = Screen.ROOM },
                     )
                     Screen.DRAFTS -> DraftListScreen(
+                        onNavigateBack = { currentScreen = Screen.RECORDING },
+                        onNavigateToRoom = { currentScreen = Screen.ROOM },
+                    )
+                    Screen.ROOM -> RoomScreen(
                         onNavigateBack = { currentScreen = Screen.RECORDING },
                     )
                 }
@@ -41,4 +47,4 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { RECORDING, DRAFTS }
+private enum class Screen { RECORDING, DRAFTS, ROOM }

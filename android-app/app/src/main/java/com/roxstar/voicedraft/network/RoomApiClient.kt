@@ -162,6 +162,23 @@ class RoomApiClient(
     }
 
     /**
+     * Leaves an existing room and marks membership as LEFT.
+     * Endpoint: `POST /rooms/{roomId}/leave`
+     */
+    suspend fun leaveRoom(roomId: String, userId: String): Result<RoomStateDto> = withContext(Dispatchers.IO) {
+        val url = "$baseUrl/rooms/${roomId.trim()}/leave"
+        val request = Request.Builder()
+            .url(url)
+            .addHeader(HEADER_USER_ID, userId.trim())
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        executeRequest(request) { responseBody ->
+            RoomStateDto.fromJson(JSONObject(responseBody))
+        }
+    }
+
+    /**
      * Retrieves the current room state.
      * Endpoint: `GET /rooms/{roomId}`
      */

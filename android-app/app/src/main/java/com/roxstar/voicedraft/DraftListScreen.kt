@@ -59,6 +59,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 fun DraftListScreen(
     viewModel: DraftViewModel = viewModel(),
     onNavigateBack: () -> Unit = {},
+    onNavigateToRoom: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val playbackUiState by viewModel.playbackUiState.collectAsState()
@@ -91,6 +92,11 @@ fun DraftListScreen(
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onNavigateToRoom) {
+                        Text("Rooms ›", color = MaterialTheme.colorScheme.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

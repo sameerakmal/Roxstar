@@ -93,8 +93,9 @@ dependencies {
     // Native audio I/O. Consumed by native-audio/CMakeLists.txt through prefab.
     implementation("com.google.oboe:oboe:1.9.3")
 
-    // Networking (Phase 6B)
+    // Networking (Phase 6B & 6C)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.socket:socket.io-client:2.1.1")
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
