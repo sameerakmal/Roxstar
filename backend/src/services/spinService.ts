@@ -90,6 +90,15 @@ async function completeWithWinner(spin: SpinRecord, winnerUserId: Types.ObjectId
     },
     ROOM_EVENTS.winnerAnnounced,
   );
+
+  logger.info(
+    {
+      roomId: completed.roomId.toString(),
+      spinId: completed._id.toString(),
+      userId: winnerUserId.toString(),
+    },
+    'Spin completed with winner',
+  );
 }
 
 async function abortSpin(spin: SpinRecord, reason: string): Promise<void> {
@@ -107,6 +116,15 @@ async function abortSpin(spin: SpinRecord, reason: string): Promise<void> {
     'spin_aborted',
     { roomId: aborted.roomId.toString(), spinId: aborted._id.toString(), reason },
     null,
+  );
+
+  logger.info(
+    {
+      roomId: aborted.roomId.toString(),
+      spinId: aborted._id.toString(),
+      reason,
+    },
+    'Spin aborted',
   );
 }
 
@@ -156,6 +174,18 @@ async function eliminateOnce(spin: SpinRecord): Promise<void> {
       remainingPlayers: remainingOf(active.participants),
     },
     ROOM_EVENTS.userEliminated,
+  );
+
+  logger.info(
+    {
+      roomId: spin.roomId.toString(),
+      spinId: spin._id.toString(),
+      userId: outcome.participant.userId.toString(),
+      eliminationOrder: outcome.participant.eliminationOrder,
+      reason: outcome.participant.eliminationReason,
+      remainingCount: remainingOf(active.participants).length,
+    },
+    'Spin participant eliminated',
   );
 
   // Eliminating the second-to-last player leaves exactly one: complete immediately
@@ -250,6 +280,16 @@ export async function startSpin(
       ROOM_EVENTS.spinStarted,
     );
 
+    logger.info(
+      {
+        roomId: running.roomId.toString(),
+        spinId: running._id.toString(),
+        userId: callerUserId.toString(),
+        eligibleCount: active.participants.length,
+      },
+      'Spin started',
+    );
+
     await scheduleNextTick(running._id);
 
     return buildSpinStateDto(running);
@@ -314,6 +354,18 @@ async function applyParticipantLeft(
       remainingPlayers: remainingOf(active.participants),
     },
     ROOM_EVENTS.userEliminated,
+  );
+
+  logger.info(
+    {
+      roomId: spin.roomId.toString(),
+      spinId: spin._id.toString(),
+      userId: userId.toString(),
+      eliminationOrder: eliminated.eliminationOrder,
+      reason: 'LEFT',
+      remainingCount: remainingOf(active.participants).length,
+    },
+    'Spin participant eliminated on leave',
   );
 
   const stillActive = await spinParticipantRepository.findActiveUserIds(spin._id);

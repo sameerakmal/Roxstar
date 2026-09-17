@@ -75,7 +75,7 @@ function toErrorResponse(error: unknown): { statusCode: number; body: ErrorRespo
 
 export function errorHandler(
   error: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
@@ -85,11 +85,12 @@ export function errorHandler(
   }
 
   const { statusCode, body } = toErrorResponse(error);
+  const requestId = req.id as string | undefined;
 
   if (statusCode >= 500) {
-    logger.error({ err: error }, 'Unhandled request error');
+    logger.error({ err: error, requestId }, 'Unhandled request error');
   } else {
-    logger.warn({ code: body.error.code, statusCode }, body.error.message);
+    logger.warn({ code: body.error.code, statusCode, requestId }, body.error.message);
   }
 
   res.status(statusCode).json(body);

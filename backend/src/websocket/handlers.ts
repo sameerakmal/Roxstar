@@ -54,6 +54,7 @@ async function onJoinRoom(socket: Socket, payload: unknown, ack: unknown): Promi
   }
 
   callAck(ack, { ok: true });
+  logger.info({ socketId: socket.id, userId: identity.userId.toString(), roomId: roomIdRaw }, 'Socket joined room');
 }
 
 async function detachFromRoom(socket: Socket, roomIdRaw: string): Promise<void> {
@@ -77,9 +78,11 @@ async function onLeaveRoom(socket: Socket, payload: unknown, ack: unknown): Prom
     return;
   }
 
+  const identity = getIdentity(socket);
   await socket.leave(roomIdRaw);
   await detachFromRoom(socket, roomIdRaw);
   callAck(ack, { ok: true });
+  logger.info({ socketId: socket.id, userId: identity.userId.toString(), roomId: roomIdRaw }, 'Socket left room');
 }
 
 export function registerSocketHandlers(socket: Socket): void {
@@ -88,14 +91,32 @@ export function registerSocketHandlers(socket: Socket): void {
 
   socket.on(CLIENT_EVENTS.joinRoom, (payload: unknown, ack: unknown) => {
     void onJoinRoom(socket, payload, ack).catch((error: unknown) => {
-      logger.error({ err: error, socketId: socket.id }, 'join_room failed');
+      const roomIdRaw = (payload as { roomId?: unknown } | undefined)?.roomId;
+      logger.error(
+        {
+          err: error,
+          socketId: socket.id,
+          userId: identity.userId.toString(),
+          roomId: typeof roomIdRaw === 'string' ? roomIdRaw : undefined,
+        },
+        'join_room failed',
+      );
       callAck(ack, { ok: false, code: 'INTERNAL_ERROR' });
     });
   });
 
   socket.on(CLIENT_EVENTS.leaveRoom, (payload: unknown, ack: unknown) => {
     void onLeaveRoom(socket, payload, ack).catch((error: unknown) => {
-      logger.error({ err: error, socketId: socket.id }, 'leave_room failed');
+      const roomIdRaw = (payload as { roomId?: unknown } | undefined)?.roomId;
+      logger.error(
+        {
+          err: error,
+          socketId: socket.id,
+          userId: identity.userId.toString(),
+          roomId: typeof roomIdRaw === 'string' ? roomIdRaw : undefined,
+        },
+        'leave_room failed',
+      );
       callAck(ack, { ok: false, code: 'INTERNAL_ERROR' });
     });
   });
@@ -109,9 +130,12 @@ export function registerSocketHandlers(socket: Socket): void {
         await detachFromRoom(socket, roomIdRaw);
       }
     })().catch((error: unknown) => {
-      logger.error({ err: error, socketId: socket.id }, 'disconnect cleanup failed');
+      logger.error(
+        { err: error, socketId: socket.id, userId: identity.userId.toString() },
+        'disconnect cleanup failed',
+      );
     });
 
-    logger.info({ socketId: socket.id, reason }, 'Socket disconnected');
+    logger.info({ socketId: socket.id, userId: identity.userId.toString(), reason }, 'Socket disconnected');
   });
 }

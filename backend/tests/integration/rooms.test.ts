@@ -130,21 +130,105 @@ describe('POST /rooms/:roomId/join', () => {
     ).toBe(1);
   });
 
-  it('survives a burst of concurrent joins from the same user', async () => {
+  // SP-15: Multiple distinct valid users attempt to join the same active room concurrently.
+  // Proves membership consistency, capacity/constraints, zero duplicates, and state correctness.
+  it('handles multiple distinct users joining concurrently, maintaining consistent membership and state (SP-15)', async () => {
     const owner = await createUser('Owner');
-    const joiner = await createUser('Joiner');
     const roomId = await createRoom(owner);
 
+    // Create 8 distinct valid users
+    const joinerNames = ['Alice', 'Bob', 'Charlie', 'Diana', 'Evan', 'Fiona', 'George', 'Hannah'];
+    const joinerIds = await Promise.all(joinerNames.map((name) => createUser(name)));
+
+    // Concurrently issue join requests for all 8 distinct users
     const responses = await Promise.all(
-      Array.from({ length: 6 }, () =>
-        request(app).post(`/rooms/${roomId}/join`).set(...asUser(joiner)),
-      ),
+      joinerIds.map((userId) => request(app).post(`/rooms/${roomId}/join`).set(...asUser(userId))),
     );
 
-    expect(responses.every((response) => response.status < 400)).toBe(true);
+    // Every distinct user creates a new membership: all return 201
+    expect(responses.map((r) => r.status)).toEqual(Array(8).fill(201));
+
+    // MongoDB active membership count: 1 owner + 8 joiners = 9
+    const totalActiveMembers = await RoomMemberModel.countDocuments({
+      roomId,
+      membershipState: 'JOINED',
+    });
+    expect(totalActiveMembers).toBe(9);
+
+    // Verify each user has exactly 1 active membership and no phantom/duplicate records
+    for (const userId of [owner, ...joinerIds]) {
+      const activeCount = await RoomMemberModel.countDocuments({
+        roomId,
+        userId,
+        membershipState: 'JOINED',
+      });
+      const totalCount = await RoomMemberModel.countDocuments({ roomId, userId });
+      expect(activeCount).toBe(1);
+      expect(totalCount).toBe(1);
+    }
+
+    // Verify authoritative room state via GET /rooms/:roomId contains all 9 participants
+    const roomStateRes = await request(app).get(`/rooms/${roomId}`).set(...asUser(owner));
+    expect(roomStateRes.status).toBe(200);
+    const body = roomStateRes.body as RoomStateBody;
+
+    expect(body.participants).toHaveLength(9);
+    const participantIds = body.participants.map((p) => p.userId).sort();
+    const expectedIds = [owner, ...joinerIds].sort();
+    expect(participantIds).toEqual(expectedIds);
+
+    // Verify display names are correctly resolved and uncorrupted
+    const displayNames = body.participants.map((p) => p.displayName).sort();
+    expect(displayNames).toEqual(['Alice', 'Bob', 'Charlie', 'Diana', 'Evan', 'Fiona', 'George', 'Hannah', 'Owner'].sort());
+    expect(displayNames).not.toContain('Unknown user');
+
+    // Verify all participants have valid state
+    for (const p of body.participants) {
+      expect(p.connectionState).toBe('DISCONNECTED');
+    }
+  });
+
+  // SP-15: Interleaved concurrent joins with both distinct users and simultaneous duplicate requests
+  it('handles concurrent joins with distinct users and racing duplicate requests without corruption (SP-15)', async () => {
+    const owner = await createUser('Owner');
+    const roomId = await createRoom(owner);
+
+    const userA = await createUser('UserA');
+    const userB = await createUser('UserB');
+    const userC = await createUser('UserC');
+
+    // 6 requests total: 2 concurrent requests per user
+    const requests = [
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userA)),
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userA)),
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userB)),
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userB)),
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userC)),
+      request(app).post(`/rooms/${roomId}/join`).set(...asUser(userC)),
+    ];
+
+    const responses = await Promise.all(requests);
+
+    // All requests succeed with 200 or 201
+    expect(responses.every((r) => r.status === 200 || r.status === 201)).toBe(true);
+
+    // Exactly 3 created (201) and 3 idempotent repeats (200)
+    const createdCount = responses.filter((r) => r.status === 201).length;
+    const repeatCount = responses.filter((r) => r.status === 200).length;
+    expect(createdCount).toBe(3);
+    expect(repeatCount).toBe(3);
+
+    // Exactly 4 active members (1 owner + 3 users)
     expect(
-      await RoomMemberModel.countDocuments({ roomId, userId: joiner, membershipState: 'JOINED' }),
-    ).toBe(1);
+      await RoomMemberModel.countDocuments({ roomId, membershipState: 'JOINED' }),
+    ).toBe(4);
+
+    // Zero duplicate memberships per user
+    for (const uid of [userA, userB, userC]) {
+      expect(
+        await RoomMemberModel.countDocuments({ roomId, userId: uid, membershipState: 'JOINED' }),
+      ).toBe(1);
+    }
   });
 
   it('404s for a room that does not exist', async () => {
