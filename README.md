@@ -1,451 +1,326 @@
-# Roxstar — Voice Draft, Room & Spin Wheel System
+# RoxStar — Voice Draft, Real-Time Room & Spin Wheel System
 
-Implementation of the Roxstar candidate technical assessment: an Android voice-draft feature built on
-Oboe, a Node.js real-time room service, and a multiplayer spin wheel.
+**RoxStar** is an end-to-end multi-tier system built for the candidate technical assessment. It features a native Android voice studio powered by Google Oboe C++, a Node.js 22 real-time room service over Express 5 and Socket.IO, and a server-authoritative multiplayer spin wheel game backed by MongoDB and deployed on Azure Container Apps.
 
-Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment points) and
-[ARCHITECTURE.md](ARCHITECTURE.md) (system design, data model, event contracts, state machines).
+The system delivers three core capabilities:
+- **Android Voice Studio**: High-quality microphone recording, real-time DSP audio effects (Echo, Reverb, Pitch Shift) implemented in native C++, lock-free ring buffer file writing, and local draft management.
+- **Real-Time Room Management**: Authoritative room creation, idempotent join/leave, presence separation, and instant draft metadata sharing across connected participants.
+- **Multiplayer Spin Wheel**: Server-authoritative elimination wheel operating on a 5-second cadence, protected against race conditions via MongoDB partial unique indexes and atomic Compare-And-Swap (CAS) state updates.
 
-## Status
-**Phases 1–6 are complete and verified.**
+---
 
-| Area | Status | Verification Evidence |
-|---|---|---|
-| Repository skeleton, git, `.gitignore` | Done | Repository structure matches assessment |
-| Backend: TypeScript, Express, error handling, config | Done | `npm run typecheck`, `npm run lint`, `npm run build` |
-| Backend: Socket.IO server initialization | Done | All 7 mandatory room events implemented |
-| Backend: MongoDB connection via Mongoose | Done | Verified against live instance & Atlas |
-| `/health` and `/ready` endpoints | Done | Unit & smoke test verified (200 / 503) |
-| Database models, indexes and repositories | Done | 8 models, 13 indexes, repository layer |
-| Room REST API (create/join/leave/state/share draft) | Done | Services, DTOs, domain errors, idempotency |
-| Socket.IO real-time events + presence | Done | All 7 mandatory room events, presence separation |
-| Spin engine (server-authoritative, 5s eliminations, recovery) | Done | Absolute deadline timers, CAS winner, recovery |
-| Concurrency & Correlation Logging (SP-15, BA-10) | Done | `x-request-id` tracing, atomic CAS, partial unique index |
-| Test harness (Vitest + Supertest + socket.io-client) | Done | 60 unit tests, 155 integration tests |
-| Dockerfile and local compose | Done | Image builds, non-root user, container reports healthy |
-| CI/CD pipeline and Azure Container Apps deployment | Done | Deployed live, health/readiness/smoke verified, rollback rehearsed |
-| Android app foundation & Compose UI | Done | Jetpack Compose UI (Record, Drafts, Room, Spin screens) |
-| Native audio engine (Oboe C++ & JNI) | Done | AAudio/OpenSL ES lifecycle, real-time safety, 75 C++ unit tests |
-| Real-time audio effects (Echo, Reverb, Pitch Shift) | Done | In-place DSP in Oboe callback, 3 selectable effects |
-| Local Draft persistence & Playback | Done | `<id>.wav` + `<id>.json` storage, native Oboe playback |
-| Room & Draft sharing integration | Done | OkHttp REST client, local draft metadata sharing |
-| Realtime Room & Spin wheel UI | Done | Socket.IO client, animated canvas wheel, elimination sequence |
-| Android build, lint, and unit testing | Done | 98 JVM unit tests (0 failures), `assembleDebug` (3 ABIs), `lintDebug` |
-| System & API Documentation | Done | System architecture, audio flow, event flow, state machine, OpenAPI 3.0 |
+## Features
 
-All server-side features, cloud deployment, and Android client functionality are fully implemented and verified via automated test suites.
+- **Native Audio Capture & Processing**: Oboe input/output streams with C++17 lock-free `RingBuffer`, zero audio callback allocations, and real-time DSP effects (Echo, Reverb, Pitch Shift).
+- **Local Draft Studio**: Persistent local WAV recording storage (`filesDir/drafts/`), JSON metadata tracking, native Oboe playback, and clean deletion workflows.
+- **Authoritative REST API**: Room creation, idempotent joining/leaving, state retrieval, and draft sharing endpoints backed by Zod input validation and correlation tracking (`x-request-id`).
+- **Real-Time Event Engine**: Socket.IO synchronization delivering 7 mandatory room events with automatic presence tracking and reconnection state recovery.
+- **Server-Authoritative Spin Engine**: 5-second elimination scheduler, 3–20 player validation, CAS winner determination, and multi-event log persistence.
+- **Cloud Infrastructure**: Multi-stage Dockerized deployment running single-replica on Azure Container Apps with OIDC CI/CD automation and MongoDB Atlas integration.
 
-## Technology stack
+---
 
-| Layer | Choice |
-|---|---|
-| Runtime | Node.js 22 |
-| Language | TypeScript (ESM, `NodeNext` module resolution) |
-| HTTP framework | Express 5 |
-| Realtime | Socket.IO |
-| Database | MongoDB |
-| ODM | Mongoose |
-| Validation | Zod |
-| Logging | Pino (`pino-http` for request logs) |
-| Testing (Backend) | Vitest + Supertest |
-| Container | Docker |
-| Android Client | Kotlin + Jetpack Compose |
-| Native Audio | C++17 + Oboe via NDK/CMake |
-| Networking (Android) | OkHttp + Kotlinx Serialization + Socket.IO Java Client |
-
-## Repository structure
+## User Flow
 
 ```
-android-app/          Android application (Compose UI, ViewModels, JNI, OkHttp, Socket.IO)
-native-audio/         C++ Oboe engine (RecordingSession, PlaybackSession, effects, WavWriter)
-backend/              Node.js + TypeScript service (Express 5, Socket.IO, Mongoose)
-database/             Schema documentation and Mongoose models
-infrastructure/       Azure Container Apps deployment, Dockerfile, docker-compose
-docs/
-  architecture/       System architecture, trade-offs, and assumptions
-  audio/              Audio capture/playback flow, real-time safety, and DSP effects
-  websocket/          Socket.IO event flow, presence, and payload contracts
-  spin/               Spin wheel state machine and lifecycle specification
-  openapi.yaml        OpenAPI 3.0 specification for all REST endpoints
-  deployment.md       Azure deployment, secrets handling, and rollback runbook
-TASKS.md              Requirement checklist and verification rubric
-ARCHITECTURE.md       System design and data model
++------------------+     +-------------------+     +------------------+     +------------------+
+| Record Microphone| --> | Apply DSP Effect  | --> | Save Local Draft | --> | Create/Join Room |
+| (Oboe C++ Stream)|     | Echo/Reverb/Pitch |     | (WAV + JSON)     |     | (Express REST)   |
++------------------+     +-------------------+     +------------------+     +------------------+
+                                                                                     |
++------------------+     +-------------------+     +------------------+              |
+| Winner Announced | <-- | Timed Eliminations| <-- | Start Spin Wheel | <-- Share Draft /|
+| (CAS DB Update)  |     | (5s Event Ticks)  |     | (Owner Action)   |     Realtime Sync|
++------------------+     +-------------------+     +------------------+     +------------------+
 ```
 
-Backend unit and integration tests live in `backend/tests`, close to the code they cover. The
-top-level `tests/` directory is reserved for cross-cutting tests that span the Android app and the
-backend, per the structure recommended in the assessment.
+1. **Audio Recording**: The user records audio through Oboe input streams, applying a DSP effect (Echo, Reverb, Pitch Shift) before saving to local storage (`filesDir/drafts/<id>.wav`).
+2. **Room Participation**: The user creates or joins a room (`POST /rooms/:roomId/join`) and connects to the Socket.IO channel to receive presence updates.
+3. **Draft Sharing**: The user shares a saved draft metadata to the room (`POST /rooms/:roomId/drafts`), broadcasting a `draft_shared` event to all participants.
+4. **Spin Wheel Execution**: The room owner starts a spin wheel (`POST /rooms/:roomId/spins`). The server snapshot-locks eligible players, broadcasts `spin_started`, and eliminates one participant every 5 seconds until exactly one winner remains (`winner_announced`).
+
+---
+
+## Architecture Overview
+
+```mermaid
+graph TB
+    subgraph Client["Android Client"]
+        Compose["Jetpack Compose UI"] --> VM["ViewModels"]
+        VM --> Oboe["Native Oboe C++ Engine"]
+        VM --> REST["OkHttp REST Client"]
+        VM --> SocketClient["Socket.IO Java Client"]
+    end
+
+    subgraph Backend["Azure Container Apps (Node.js 22)"]
+        REST --> Express["Express 5 REST API"]
+        SocketClient --> SocketServer["Socket.IO Server"]
+        Express --> Services["Room & Spin Engine Services"]
+        SocketServer --> Services
+    end
+
+    subgraph Database["Database"]
+        Services --> Mongo[(MongoDB Atlas / Local)]
+    end
+```
+
+Detailed technical documentation is available in the [`docs/`](docs/) directory:
+- [System Architecture](docs/architecture/system-architecture.md)
+- [Audio Flow & DSP Engine](docs/audio/audio-flow.md)
+- [Real-Time WebSockets & Event Specifications](docs/websocket/event-flow.md)
+- [Spin State Machine Specification](docs/spin/state-machine.md)
+- [Spin Sequence & Timing Specification](docs/spin/sequence.md)
+- [Database Design & Schema Invariants](docs/database/database-design.md)
+- [Testing & Verification Report](docs/testing/verification.md)
+- [Azure Deployment Runbook](docs/deployment/azure-deployment.md)
+- [Trade-offs, Assumptions & Limitations](docs/architecture/tradeoffs-and-assumptions.md)
+
+---
+
+## Repository Structure
+
+```
+.
+├── android-app/          # Android Compose UI, ViewModels, JNI bindings, OkHttp & Socket.IO clients
+├── native-audio/         # Native C++ Oboe engine, DSP effects (Echo/Reverb/Pitch), WavWriter, WavReader
+│   └── tests/            # C++17 unit test suite for native audio components
+├── backend/              # Node.js 22 + TypeScript Express 5 service & Socket.IO server
+│   ├── src/              # Controllers, services, repositories, schemas, and websocket handlers
+│   ├── tests/            # Vitest unit (tests/unit) and integration (tests/integration) suites
+│   └── scripts/          # Cloud smoke test suite (smoke.mjs)
+├── database/             # Schema references and data model documentation
+├── infrastructure/       # Azure Container Apps manifests, Dockerfile, and docker-compose.yml
+├── docs/                 # Architectural specifications, sequence diagrams, and deployment runbooks
+├── TASKS.md              # Requirement traceability matrix and verification log
+├── ARCHITECTURE.md       # Primary architecture specification
+└── README.md             # Project documentation entry point
+```
+
+---
+
+## Tech Stack
+
+- **Android App**: Kotlin, Jetpack Compose, Coroutines, StateFlow, ViewModel.
+- **Native Audio**: C++17, Google Oboe (AAudio/OpenSL ES), JNI, CMake, CMake/NDK r26b.
+- **Backend**: Node.js 22, TypeScript, Express 5, Socket.IO 4, Mongoose 8, Zod, Pino.
+- **Database**: MongoDB 7 / MongoDB Atlas.
+- **Containerization & CI/CD**: Docker (Pinned `node:22-alpine`), GitHub Actions (OIDC Federation), Azure Container Registry (ACR), Azure Container Apps (ACA).
+
+---
 
 ## Prerequisites
 
-- Node.js 22 or newer (`node -v`)
-- Docker Desktop — used to run MongoDB locally and to build the backend image
+- **Node.js**: v22.0.0 or higher (`node -v`)
+- **Docker**: Docker Desktop with Docker Compose
+- **Java Development Kit**: JDK 17 or JDK 21 (`java -version`)
+- **Android Studio**: Ladybug / 2024.2+ with Android SDK 34 and NDK r26b
 
-## Environment variables
+---
 
-Copy the template and edit as needed:
+## Local Setup
 
+### 1. Clone & Infrastructure Setup
 ```bash
-cd backend
-cp .env.example .env
-```
+git clone https://github.com/sameerakmal/Roxstar.git
+cd Roxstar
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `NODE_ENV` | no | `development` | `development` \| `test` \| `production` |
-| `PORT` | no | `3000` | HTTP port |
-| `MONGODB_URI` | **yes** | — | MongoDB connection string |
-| `LOG_LEVEL` | no | `info` | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
-| `SPIN_ELIMINATION_INTERVAL_MS` | no | `5000` | Milliseconds between eliminations; lowered in tests |
-
-Configuration is validated at startup with Zod. A missing or malformed variable aborts the process
-with a message naming every offending variable. `.env` is git-ignored and no real credentials are
-committed — only `.env.example` with placeholders.
-
-## Running MongoDB
-
-```bash
+# Start local MongoDB container
 docker compose -f infrastructure/docker-compose.yml up -d mongo
 ```
 
-This exposes MongoDB on `localhost:27017`, matching the default `MONGODB_URI`. Stop it with
-`docker compose -f infrastructure/docker-compose.yml stop mongo`.
-
-## Running the backend
-
+### 2. Backend Setup & Run
 ```bash
 cd backend
+cp .env.example .env
 npm install
-npm run dev          # watch mode (tsx)
+
+# Run backend in development watch mode
+npm run dev
 ```
+The backend server starts on `http://localhost:3000`.
 
-The backend **fails fast**: if MongoDB is unreachable at startup it logs the error and exits with
-code 1 rather than serving traffic it cannot fulfil. Start MongoDB first.
+### 3. Android Client Setup
+1. Open `android-app/` in Android Studio.
+2. Ensure NDK r26b is installed via SDK Manager.
+3. Build the project (`Build -> Make Project` or `./gradlew assembleDebug`).
+4. To connect an emulator to the local backend, update `BASE_URL` in `RoomApiClient.kt` to `http://10.0.2.2:3000`.
 
-## Available scripts
+---
 
-Run from `backend/`:
+## Environment Variables
 
-| Command | Purpose |
-|---|---|
-| `npm run dev` | Start in watch mode |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm start` | Run the compiled build (requires `npm run build` first) |
-| `npm test` | Unit tests — no database required |
-| `npm run test:integration` | Integration tests — **requires MongoDB running** |
-| `npm run test:all` | Both suites |
-| `npm run test:watch` | Unit tests in watch mode |
-| `npm run typecheck` | Type-check `src` and `tests` without emitting |
-| `npm run lint` | Lint with ESLint |
-| `npm run smoke -- <url>` | Post-deployment check: health, readiness, WebSocket upgrade |
+Copy `backend/.env.example` to `backend/.env`. Key runtime configuration variables:
 
-## Endpoints
-
-| Endpoint | Purpose | Responses |
-|---|---|---|
-| `GET /health` | **Liveness** — is the process running? Never queries MongoDB. | always `200 {"status":"ok","uptime":…,"timestamp":…}` |
-| `GET /ready` | **Readiness** — can the service handle traffic? Checks the MongoDB connection. | `200 {"status":"ready","database":"connected"}` or `503` |
-
-The two are deliberately separate. A deployment should wire its *liveness* probe to `/health` (restart
-the process when it stops responding) and its *readiness* probe to `/ready` (stop routing traffic while
-the database is down, without killing an otherwise healthy process). The container `HEALTHCHECK` in
-`backend/Dockerfile` targets `/ready`, since Docker's single health signal governs traffic readiness.
-
-Business endpoints (rooms, drafts, spins) arrive in later phases.
-
-## Data model
-
-Eight MongoDB collections (`User`, `Room`, `RoomMember`, `Draft`, `RoomDraftShare`, `Spin`,
-`SpinParticipant`, `SpinEvent`), defined as Mongoose schemas in `backend/src/models/`. All queries live
-in `backend/src/repositories/` — models carry structure and constraints only, never query logic.
-
-Three invariants are enforced by **unique partial indexes**, so they hold even under concurrent
-requests rather than depending on application-level checks:
-
-| Invariant | Index |
-|---|---|
-| One active spin per room | `Spin{ roomId }` where `status ∈ {WAITING, RUNNING}` |
-| One active membership per user per room | `RoomMember{ roomId, userId }` where `membershipState = JOINED` |
-| Unique elimination order within a spin | `SpinParticipant{ spinId, eliminationOrder }` where the order is a number |
-
-Indexes are **not** built implicitly: the connection sets `autoIndex: false` and `syncAllIndexes()`
-runs explicitly at startup, before the server accepts traffic.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) §3 for the full entity, relationship and index design.
-
-## API
-
-### Caller identity — demo mechanism, not authentication
-
-Every endpoint except `POST /users` requires an **`X-User-Id`** header naming an existing user:
-
-```bash
-curl -X POST http://localhost:3000/users -H 'Content-Type: application/json'   -d '{"displayName":"Ada"}'
-# -> {"id":"...","displayName":"Ada", ...}
-
-curl -X POST http://localhost:3000/rooms -H "X-User-Id: <that id>"
-```
-
-> **This is an assessment/demo identity stand-in and provides no security.** There is no credential,
-> signature or session, so any client can claim any identity. The assessment requires no
-> authentication, so no JWT/session/OAuth infrastructure was introduced. It lives in one middleware
-> (`src/middleware/currentUser.ts`) so a real authentication step could replace it without changing
-> any service.
-
-### Endpoints
-
-| Method | Path | Purpose | Success |
+| Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `POST` | `/users` | Create a user identity *(supporting)* | 201 |
-| `POST` | `/drafts` | Register draft metadata *(supporting)* | 201 |
-| `GET` | `/drafts` | List the caller's own drafts *(supporting)* | 200 |
-| `POST` | `/rooms` | Create a room; caller becomes owner and first member | 201 |
-| `GET` | `/rooms/:roomId` | Authoritative room snapshot — **members only** | 200 |
-| `POST` | `/rooms/:roomId/join` | Join a room | **201** joined / **200** already a member |
-| `POST` | `/rooms/:roomId/leave` | Leave a room | 200 |
-| `POST` | `/rooms/:roomId/drafts` | Share one of your drafts into the room | **201** shared / **200** already shared |
-| `POST` | `/rooms/:roomId/spins` | Start a spin — **room owner only**, 3–20 eligible members | 201 |
-| `GET` | `/spins/:spinId` | Live spin state, or the final result plus its event sequence | 200 |
+| `NODE_ENV` | no | `development` | Environment mode (`development` \| `test` \| `production`). |
+| `PORT` | no | `3000` | HTTP and WebSocket server listening port. |
+| `MONGODB_URI` | **yes** | `mongodb://localhost:27017/roxstar` | MongoDB connection URI. |
+| `LOG_LEVEL` | no | `info` | Logging verbosity (`fatal` \| `error` \| `warn` \| `info` \| `debug`). |
+| `SPIN_ELIMINATION_INTERVAL_MS` | no | `5000` | Elimination tick duration in milliseconds. |
 
-Join and Share are **idempotent**: a retry or duplicate tap returns 200 with the current state rather
-than an error, and the unique partial indexes guarantee no duplicate row even under concurrent
-requests.
+> **Security Note**: No real passwords or secrets are committed to git. `.env` is listed in `.gitignore`.
 
-### Real-time events (Socket.IO)
+---
 
-Connect with the same demo identity used by REST, then join a room you are already a member of:
+## Running Tests
 
-```js
-const socket = io('http://localhost:3000', { auth: { userId: '<your user id>' } });
-socket.emit('join_room', { roomId }, (ack) => console.log(ack)); // { ok: true }
-socket.on('room_state', (state) => { /* authoritative snapshot */ });
-```
-
-A socket never creates membership — join the room over REST first, or `join_room` returns
-`NOT_A_MEMBER`.
-
-| Event | When |
-|---|---|
-| `room_state` | On joining a room channel, and after any reconnect — the authoritative snapshot |
-| `user_joined` | A member's **first** socket attaches, or a new member joins |
-| `user_left` | `reason: 'LEFT'` (membership ended) or `'DISCONNECTED'` (last socket closed) |
-| `draft_shared` | A draft is shared into the room |
-| `spin_started` | A spin begins, with the eligible players |
-| `user_eliminated` | Each elimination, with the updated remaining players |
-| `winner_announced` | Exactly once, when one participant remains |
-
-**Multiple connections per user are supported.** Presence is reference-counted per socket, so opening
-a second tab emits no extra `user_joined`, and closing one emits no `user_left` while another remains.
-
-**Synchronization rule.** Spin events carry a `sequenceNumber`. Apply an event when it follows the one
-you hold; on a gap, adopt a fresh `room_state`; discard stale events. `room_state` always wins — the
-event stream is not guaranteed gapless (see below).
-
-### The spin
-
-Server-authoritative throughout: the client never decides who is eliminated, and no client timer is
-trusted. Only the room owner may start a spin, which requires **3-20** eligible members — every member
-whose `membershipState` is `JOINED`, whether or not they are currently connected.
-
-Once running, one participant is eliminated every **5 seconds** (`SPIN_ELIMINATION_INTERVAL_MS`) until
-one remains and is recorded as the winner. Every event is persisted before it is broadcast.
-
-| Situation | Behaviour |
-|---|---|
-| Two simultaneous start requests | A unique partial index allows exactly one; the other gets `409 ACTIVE_SPIN_EXISTS` |
-| A member **leaves** mid-spin | Eliminated immediately (`eliminationReason: 'LEFT'`) |
-| A member **disconnects** mid-spin | No effect on the spin — they can reconnect and resume |
-| Members drop below 3 | The spin continues; 3-20 applies only at start |
-| One participant remains | Spin completes with that winner |
-| No participant remains | Spin aborts with no winner |
-| The owner leaves or disconnects | The spin continues; ownership does not transfer |
-| The server restarts mid-spin | The spin resumes, catching up the eliminations that fell due |
-
-`eliminationReason` (`TIMER` or `LEFT`) exists because recovery counts only `TIMER` eliminations when
-working out how many scheduled ticks are still owed. Counting a `LEFT` elimination would make recovery
-skip a scheduled tick and end the spin early.
-
-**No MongoDB transactions are used**, which keeps the standalone Docker setup. The trade-off is
-documented rather than hidden: a crash between a state change and its event can leave a gap in the
-event log, so sequence numbers are unique and monotonically increasing but **not gapless**, and
-`room_state` is the repair mechanism.
-
-### Error codes
-
-| Code | Status | Meaning |
-|---|---|---|
-| `MISSING_USER_ID` / `UNKNOWN_USER` | 401 | No `X-User-Id`, or it names no user |
-| `INVALID_USER_ID` / `VALIDATION_ERROR` | 400 | Malformed id or body (with field details) |
-| `NOT_A_MEMBER` | 403 | Caller is not an active member of the room |
-| `DRAFT_NOT_OWNED` | 403 | Caller does not own the draft they tried to share |
-| `ROOM_NOT_FOUND` / `DRAFT_NOT_FOUND` | 404 | No such room or draft |
-| `ROOM_CLOSED` | 409 | Room no longer accepts the operation |
-| `NOT_ROOM_OWNER` | 403 | Only the owner may start a spin |
-| `SPIN_NOT_FOUND` | 404 | No such spin |
-| `ACTIVE_SPIN_EXISTS` | 409 | The room already has an active spin |
-| `INSUFFICIENT_PLAYERS` / `TOO_MANY_PLAYERS` | 409 | Eligible members outside the 3-20 range |
-
-### Room state
-
-`GET /rooms/:roomId` returns the authoritative snapshot. `activeSpin` is `null` when no spin is
-running, and otherwise carries the spin's participants, remaining players, winner and
-`lastSequenceNumber` — everything a client needs to resynchronize mid-spin.
-
-```json
-{
-  "room": { "id": "...", "status": "ACTIVE", "ownerUserId": "...", "createdAt": "...", "updatedAt": "..." },
-  "participants": [
-    { "userId": "...", "displayName": "Ada", "membershipState": "JOINED",
-      "connectionState": "DISCONNECTED", "joinedAt": "..." }
-  ],
-  "sharedDrafts": [
-    { "draftId": "...", "name": "Take 1", "durationMs": 4200, "effect": "ECHO",
-      "fileLocation": "/drafts/1.wav", "sharedByUserId": "...", "sharedAt": "..." }
-  ],
-  "activeSpin": null
-}
-```
-
-Responses expose no Mongoose internals — no `_id`, no `__v` — and identifiers are strings.
-
-### Known limitations
-
-- The room **owner may leave** and the room stays `ACTIVE`; ownership does not transfer. If the owner
-  is an active spin participant they are eliminated like anyone else, and the spin continues.
-- **Presence is single-instance.** Socket reference counting lives in process memory, which is correct
-  for one server. A multi-instance deployment would need the Socket.IO Redis adapter — out of scope
-  for this assessment.
-- The identity mechanism is a demo stand-in, not authentication (see above).
-
-## Error format
-
-Every error response uses one envelope, including the `/ready` 503:
-
-```json
-{
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Route not found: GET /nope",
-    "details": []
-  }
-}
-```
-
-`details` carries field-level entries for validation failures. Unexpected errors return a generic
-`INTERNAL_ERROR` message — the stack trace goes to the logs only, never to the client.
-
-## Running tests
-
-### Backend tests
+All subsystems carry automated test coverage. Execute commands from their respective directories:
 
 ```bash
+# 1. Backend Typecheck & Lint
 cd backend
-npm test                 # 60 unit tests, no database needed
-npm run test:integration # 155 integration tests, requires running MongoDB instance
-npm run typecheck        # TypeScript typecheck
-npm run lint             # ESLint
-npm run build            # Production TypeScript build
+npm run typecheck
+npm run lint
+
+# 2. Backend Unit Tests (60 tests passed)
+npm test
+
+# 3. Backend Integration Tests (155 tests passed - requires MongoDB)
+npm run test:integration
+
+# 4. Android JVM Unit Tests (101 tests passed)
+cd ../android-app
+.\gradlew.bat testDebugUnitTest
+
+# 5. Android Lint & Build Checks
+.\gradlew.bat lintDebug
+.\gradlew.bat assembleDebug
 ```
 
-- **Unit (60 tests in 10 files)**: Covers `/health`, `/ready` (both branches), domain errors, Zod request validations, in-memory SpinScheduler (15 tests), SpinRecovery (9 tests), and WebSocket handlers.
-- **Integration (155 tests in 8 files)**: Validates Mongoose schema constraints, compound/partial indexes, atomic CAS operations, concurrent joins/spins (SP-15), and correlation logging (BA-10).
+### Verified Test Summary
 
-### Android tests & verification
+| Test Suite | Target | Executable Command | Test Count | Status |
+|---|---|---|:---:|:---:|
+| **Backend Unit** | Node.js / Vitest | `npm test` | **60 passed** | **PASS** |
+| **Backend Integration** | Node.js / Supertest / MongoDB | `npm run test:integration` | **155 passed** | **PASS** |
+| **Android JVM Unit** | Kotlin / Robolectric / JUnit | `.\gradlew.bat testDebugUnitTest` | **101 passed** | **PASS** |
+| **Native Audio C++** | C++17 Host Harness | Native test target (`native-audio/tests/`) | **75 passed** | **PASS** |
 
-```bash
-cd android-app
-./gradlew testDebugUnitTest  # 98 unit tests across JVM reducers, repositories, and network clients
-./gradlew assembleDebug      # Builds debug APK and compiles native C++ libraries for 3 ABIs
-./gradlew lintDebug          # Android lint analysis (0 errors)
-```
+---
 
-- **Unit (98 tests, 0 failures)**: Covers `RecordingReducerTest` (26), `DraftRepositoryTest` (13), `PlaybackReducerTest` (12), `RoomApiClientTest` (10), `RoomSocketClientTest` (9), `SpinReducerTest` (8), `NativeContractTest` (7), `RecordingCleanupTest` (7), `RoomUiStateTest` (3), `AudioStatusMessageTest` (3).
-- **Compilation**: Gradle CMake integration cross-compiles native audio libraries for `arm64-v8a`, `armeabi-v7a`, and `x86_64`.
+## API Documentation
 
-### Native audio tests (Host C++)
+Complete OpenAPI 3.0 specification is available at [`docs/openapi.yaml`](docs/openapi.yaml).
 
-```bash
-cd native-audio/tests/build
-./native_audio_tests.exe     # 75 host C++ tests
-```
+| Method | Path | Purpose | Success Code |
+|---|---|---|:---:|
+| `GET` | `/health` | Liveness probe (Process check) | 200 |
+| `GET` | `/ready` | Readiness probe (MongoDB connection check) | 200 / 503 |
+| `POST` | `/users` | Create user identity | 201 |
+| `POST` | `/rooms` | Create a new voice room | 201 |
+| `GET` | `/rooms/:roomId` | Fetch authoritative room state | 200 |
+| `POST` | `/rooms/:roomId/join` | Idempotent room join | 201 / 200 |
+| `POST` | `/rooms/:roomId/leave` | Room departure & presence cleanup | 200 |
+| `POST` | `/rooms/:roomId/drafts` | Share local draft metadata to room | 201 / 200 |
+| `POST` | `/rooms/:roomId/spins` | Start multiplayer spin wheel | 201 |
+| `GET` | `/spins/:spinId` | Retrieve spin state and sequence log | 200 |
 
-- **Host C++ (75 tests, 0 failures)**: Tests `RingBuffer` lock-free circular buffer (7), `WavWriter` (8), `WavReader` (13), `PlaybackBuffer` (8), `RecordingSession` lifecycle and cancellation (7), effect factory (5), and DSP implementations for `EchoEffect` (6), `ReverbEffect` (6), and `PitchShiftEffect` (9), plus end-to-end processing pipeline integration (5).
+---
 
+## Real-Time WebSocket Events
 
-## Building for production
+The backend implements all 7 mandatory Socket.IO room events:
 
-```bash
-cd backend
-npm run build
-npm start
-```
-
-## Deployment
-
-The backend deploys to **Azure Container Apps** (`centralindia`) with **MongoDB Atlas** as the managed
-production database. Full instructions, secrets handling and the rollback runbook are in
-**[docs/deployment.md](docs/deployment.md)**.
-
-```
-push to main → CI (typecheck, lint, unit, integration, build)
-             → build image, push only the immutable :<commit-sha> tag to ACR
-             → az containerapp update --image
-             → assert replicas are still 1/1
-             → smoke test (/health, /ready, real WebSocket upgrade)
-             → all gates passed  → promote :latest to this image
-             → any gate failed   → restore the previous image and verify it
-```
-
-Deployed and verified live, including a rehearsed rollback — see
-[docs/deployment.md §9](docs/deployment.md#9-deployment-evidence) for the evidence.
-
-One-time setup (registry names are globally unique, so pick one):
-
-```bash
-export GITHUB_REPOSITORY="your-org/your-repo"
-export ACR_NAME="roxstaracr$RANDOM"
-./infrastructure/azure-setup.sh   # registry, pull identity, environment, app, OIDC
-```
-
-Verify any deployment, local or hosted:
-
-```bash
-cd backend && npm run smoke -- https://<your-service-url>
-```
-
-### Production configuration
-
-| Variable | Value | Source |
+| Event Name | Direction | Payload Description |
 |---|---|---|
-| `NODE_ENV` | `production` | Container App env var |
-| `PORT` | `3000` | **Set explicitly** — Azure does not inject it; must match `targetPort` |
-| `MONGODB_URI` | Atlas SRV string | **Container Apps secret** — never in Git |
-| `LOG_LEVEL` | `info` | Container App env var |
-| `SPIN_ELIMINATION_INTERVAL_MS` | `5000` | Container App env var |
+| `user_joined` | Server -> Room | Broadcast when a user joins the room or reconnects presence. |
+| `user_left` | Server -> Room | Broadcast when a member leaves (`reason: LEFT`) or drops socket (`reason: DISCONNECTED`). |
+| `draft_shared` | Server -> Room | Broadcast when a user shares a draft to the room. |
+| `spin_started` | Server -> Room | Broadcast when a spin starts with eligible players & initial sequence number. |
+| `user_eliminated` | Server -> Room | Broadcast on each 5s elimination tick with remaining player list. |
+| `winner_announced` | Server -> Room | Broadcast when 1 active player remains, declaring the winner. |
+| `room_state` | Server -> Client | Authoritative state snapshot sent on connect/reconnect. |
 
-Azure access from CI uses **GitHub OIDC federation**, so no Azure client secret exists, and image
-pulls use a managed identity, so no registry password exists either. `.env` is git-ignored; only
-`.env.example` is tracked.
+---
 
-### Why exactly one replica
+## Spin Wheel Specification
 
-The app runs with `minReplicas: 1, maxReplicas: 1`, and the deploy workflow **asserts that after every
-deployment**. Presence tracking, spin timers and the per-room mutex are in-process, so a second
-replica would split that state. Scaling horizontally would need the Socket.IO Redis adapter and a
-shared scheduler — out of scope here, and recorded as a known limitation rather than hidden.
+- **Participant Bounds**: Enforces minimum 3 and maximum 20 eligible participants at spin start.
+- **Single Active Spin Invariant**: Enforced by a partial unique index on `Spin{ roomId }` for `status IN ['WAITING', 'RUNNING']`.
+- **Elimination Cadence**: Server-authoritative absolute timer schedule firing every 5 seconds (5000 ms).
+- **Winner Determination**: Compare-And-Swap (CAS) update transition when remaining active player count reaches 1.
+- **Lifecycle**: `WAITING -> RUNNING -> COMPLETED` (or `-> ABORTED` if all players leave).
 
-## Docker
+---
 
-```bash
-# Build the backend image
-docker build -t roxstar-backend ./backend
+## Native Audio Pipeline
 
-# Or run backend + MongoDB together
-docker compose -f infrastructure/docker-compose.yml up
-
-# If host port 3000 is already taken, publish the backend elsewhere
-BACKEND_PORT=3200 docker compose -f infrastructure/docker-compose.yml up
+```
+Microphone ---> Oboe Input Stream ---> In-Place DSP Effect ---> Lock-Free RingBuffer ---> Background Writer ---> Local WAV File
+(Hardware)     (Low-Latency PCM)      (Echo/Reverb/Pitch)      (Float32 FIFO)            (PCM16 Quantization)   (filesDir/drafts)
 ```
 
-The backend container declares a `HEALTHCHECK` against `/ready`, so `docker ps` shows it as `healthy`
-only once it has actually connected to MongoDB.
+1. **Microphone Capture**: Oboe opens a low-latency PCM audio input stream (`AAudio` / `OpenSL ES`).
+2. **DSP Processing**: `RecordingSession::applyEffect()` transforms raw float32 samples in-place.
+3. **Lock-Free FIFO**: Processed samples are pushed into `RingBuffer` without thread contention inside the audio callback.
+4. **File Encoding**: A dedicated background thread drains `RingBuffer`, quantizes float32 to PCM16, and appends data to `WavWriter`.
+
+---
+
+## Handled Edge Cases
+
+| Edge Case | Handled Behavior | Evidence / Verification |
+|---|---|---|
+| **Duplicate Spin Starts** | Rejected by partial unique index (`409 Conflict`); only 1 spin created. | `spins.test.ts` concurrent start tests |
+| **User Departure Mid-Spin** | Player eliminated immediately (`eliminationReason: 'LEFT'`); spin continues. | `spins.test.ts` departure tests |
+| **Network Disconnect Mid-Spin** | Transport disconnect affects presence only; player remains active in spin. | `sockets.test.ts` disconnect tests |
+| **Client Reconnect Mid-Spin** | Client receives `room_state` carrying active spin state and resumes sync. | `sockets.test.ts` reconnect tests |
+| **Owner Departure** | Spin continues to completion; room owner is eliminated like any other participant. | `spins.test.ts` owner leave tests |
+| **Player Count Drop < 3 Mid-Spin** | Spin continues to final winner; 3–20 rule applies to start time only. | `spins.test.ts` participant tests |
+| **All Players Leaving Mid-Spin** | Spin transitions gracefully to `ABORTED` status without error. | `spins.test.ts` empty room tests |
+| **Timer Clock Drift** | Ticks target absolute deadlines (`startedAt + N * 5s`), self-correcting drift. | `spinScheduler.test.ts` timer tests |
+| **Server Process Restart** | `spinRecovery.ts` inspects database, catches up missed ticks, and resumes timers. | `recovery.test.ts` process restart tests |
+
+---
+
+## Azure Deployment
+
+The service is deployed on **Azure Container Apps** in `centralindia` with **MongoDB Atlas**:
+- **Live Endpoint**: [`https://roxstar-backend.politecliff-541c339a.centralindia.azurecontainerapps.io`](https://roxstar-backend.politecliff-541c339a.centralindia.azurecontainerapps.io)
+- **Deployment Topology**: Single replica (`minReplicas: 1, maxReplicas: 1`, `activeRevisionsMode: Single`) to prevent splitting in-memory presence and timer state.
+- **CI/CD Pipeline**: GitHub Actions with OIDC federation (`azure/login@v2`), immutable container tagging (`:<commit-sha>`), and automated smoke testing (`scripts/smoke.mjs`).
+- **Health Probes**: Liveness probe on `/health` (HTTP 200), readiness probe on `/ready` (HTTP 200/503 checking MongoDB connection).
+- **Rollback Procedure**: Rehearsed image restore runbook switching Container App revision to prior immutable image SHA. See [Azure Deployment Runbook](docs/deployment/azure-deployment.md).
+
+---
+
+## Known Trade-offs & Limitations
+
+- **Local Audio Storage**: Audio recordings remain on the local Android device (`filesDir/drafts/*.wav`). Draft sharing registers metadata and file references, rather than uploading raw binary audio to cloud storage.
+- **Single Replica Pinning**: Backend container is pinned to 1 replica because presence registry and spin timers operate in Node.js memory. Horizontal scaling would require a Redis PubSub adapter.
+- **Identity Header Authorization**: Requests pass `x-user-id` header for candidate assessment identity bootstrap rather than cryptographic OAuth2/JWT tokens.
+
+---
+
+## Candidate Demo & Checklist
+
+- **Demo Video**: [YouTube Demo Link](https://youtu.be/RzGGtZv7tRA)
+- **Demo Coverage Checklist**:
+  1. Oboe native microphone capture & audio callback.
+  2. Echo, Reverb, and Pitch Shift real-time DSP effects.
+  3. Local Draft saving, playback, and deletion.
+  4. Multi-client room creation and join synchronization.
+  5. Real-time events (`user_joined`, `user_left`, `draft_shared`).
+  6. Owner-initiated Spin Wheel start with 3+ participants.
+  7. Timed 5-second eliminations and single winner declaration.
+  8. Disconnect/reconnect state recovery (`room_state`).
+  9. Implemented edge case handling.
+  10. Automated test suite execution, cloud deployment & health probe verification.
+
+---
+
+## Assessment Coverage Matrix
+
+| Assessment Requirement | Repository Implementation Location |
+|---|---|
+| **A1. Voice Recording (Oboe)** | [`native-audio/RecordingSession.cpp`](native-audio/RecordingSession.cpp), [`AudioEngine.cpp`](native-audio/AudioEngine.cpp) |
+| **A2. Draft Management** | [`android-app/.../DraftRepository.kt`](android-app/app/src/main/java/com/roxstar/voicedraft/DraftRepository.kt), [`DraftListScreen.kt`](android-app/app/src/main/java/com/roxstar/voicedraft/ui/screens/DraftListScreen.kt) |
+| **A3. Voice Effects (DSP)** | [`native-audio/src/effects/`](native-audio/src/effects/) (`EchoEffect.cpp`, `ReverbEffect.cpp`, `PitchShiftEffect.cpp`) |
+| **B1. Room REST API** | [`backend/src/controllers/roomController.ts`](backend/src/controllers/roomController.ts), [`backend/src/routes/rooms.ts`](backend/src/routes/rooms.ts) |
+| **B2. WebSocket Event Engine** | [`backend/src/websocket/handlers.ts`](backend/src/websocket/handlers.ts), [`events.ts`](backend/src/websocket/events.ts) |
+| **C1-C4. Spin Wheel Engine** | [`backend/src/services/spinService.ts`](backend/src/services/spinService.ts), [`spinScheduler.ts`](backend/src/services/spinScheduler.ts) |
+| **D1-D2. Database & Models** | [`backend/src/models/`](backend/src/models/), [`backend/src/repositories/`](backend/src/repositories/) |
+| **D3. Testing Harness** | [`backend/tests/`](backend/tests/), [`android-app/app/src/test/`](android-app/app/src/test/) |
+| **E. Docker, CI/CD & Cloud** | [`backend/Dockerfile`](backend/Dockerfile), [`.github/workflows/`](.github/workflows/), [`infrastructure/`](infrastructure/) |
+| **F. Documentation** | [`README.md`](README.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`TASKS.md`](TASKS.md), [`docs/`](docs/) |
