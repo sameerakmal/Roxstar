@@ -102,6 +102,10 @@ class RoomSocketClient(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private var socket: Socket? = null
+    @Volatile
+    private var currentUserId: String? = null
+    @Volatile
+    private var activeRoomId: String? = null
 
     private val _connectionState = MutableStateFlow(SocketConnectionState.DISCONNECTED)
     val connectionState: StateFlow<SocketConnectionState> = _connectionState.asStateFlow()
@@ -114,6 +118,7 @@ class RoomSocketClient(
      * Passes the user identity in handshake auth and headers.
      */
     fun connect(userId: String) {
+        currentUserId = userId
         disconnect()
 
         _connectionState.value = SocketConnectionState.CONNECTING
@@ -122,8 +127,9 @@ class RoomSocketClient(
         val options = IO.Options().apply {
             forceNew = true
             reconnection = true
-            reconnectionAttempts = 5
+            reconnectionAttempts = 10
             reconnectionDelay = 1000L
+            reconnectionDelayMax = 5000L
             auth = mapOf("userId" to userId)
             extraHeaders = mapOf("x-user-id" to listOf(userId))
         }
@@ -142,9 +148,18 @@ class RoomSocketClient(
     }
 
     /**
+     * Attempts a fresh reconnect using the last stored user identity.
+     */
+    fun reconnect() {
+        val uid = currentUserId ?: return
+        connect(uid)
+    }
+
+    /**
      * Disconnects the socket and tears down listeners cleanly.
      */
     fun disconnect() {
+        activeRoomId = null
         socket?.let { s ->
             s.off()
             s.disconnect()
@@ -157,19 +172,32 @@ class RoomSocketClient(
     /**
      * Subscribes the socket to [roomId].
      * Emits `join_room` with an acknowledgment callback.
+     * If the socket is currently connecting, remembers the room and emits automatically upon connection.
      */
     fun joinRoom(
         roomId: String,
         onAck: ((success: Boolean, code: String?) -> Unit)? = null,
     ) {
-        val s = socket
-        if (s == null || !s.connected()) {
-            onAck?.invoke(false, "NOT_CONNECTED")
-            return
-        }
+        val trimmed = roomId.trim()
+        if (trimmed.isEmpty()) return
 
+        activeRoomId = trimmed
+        val s = socket
+        if (s != null && s.connected()) {
+            emitJoinRoom(s, trimmed, onAck)
+        } else {
+            // Socket still connecting: will automatically be sent in setupSocketListeners once connected
+            onAck?.invoke(true, null)
+        }
+    }
+
+    private fun emitJoinRoom(
+        s: Socket,
+        roomId: String,
+        onAck: ((success: Boolean, code: String?) -> Unit)? = null,
+    ) {
         val payload = JSONObject().apply {
-            put("roomId", roomId.trim())
+            put("roomId", roomId)
         }
 
         val ackCallback = Ack { args ->
@@ -189,6 +217,7 @@ class RoomSocketClient(
         roomId: String,
         onAck: ((success: Boolean) -> Unit)? = null,
     ) {
+        activeRoomId = null
         val s = socket
         if (s == null || !s.connected()) {
             onAck?.invoke(false)
@@ -211,10 +240,25 @@ class RoomSocketClient(
     private fun setupSocketListeners(s: Socket) {
         s.on(Socket.EVENT_CONNECT) {
             _connectionState.value = SocketConnectionState.CONNECTED
+            // Auto-join pending active room if present
+            activeRoomId?.let { rId ->
+                emitJoinRoom(s, rId)
+            }
         }
 
         s.on(Socket.EVENT_DISCONNECT) {
             _connectionState.value = SocketConnectionState.DISCONNECTED
+        }
+
+        s.on("reconnect") {
+            _connectionState.value = SocketConnectionState.CONNECTED
+            activeRoomId?.let { rId ->
+                emitJoinRoom(s, rId)
+            }
+        }
+
+        s.on("reconnecting") {
+            _connectionState.value = SocketConnectionState.CONNECTING
         }
 
         s.on(Socket.EVENT_CONNECT_ERROR) { args ->

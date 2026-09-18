@@ -41,6 +41,27 @@ class RoomApiClient(
         get() = baseUrlProvider().trimEnd('/')
 
     /**
+     * Bootstraps a new user identity with the backend.
+     * Endpoint: `POST /users`
+     * Body: `{"displayName": "{displayName}"}`
+     */
+    suspend fun createUser(displayName: String): Result<UserDto> = withContext(Dispatchers.IO) {
+        val url = "$baseUrl/users"
+        val bodyJson = JSONObject().apply {
+            put("displayName", displayName.trim().ifBlank { "User" })
+        }.toString()
+
+        val request = Request.Builder()
+            .url(url)
+            .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        executeRequest(request) { responseBody ->
+            UserDto.fromJson(JSONObject(responseBody))
+        }
+    }
+
+    /**
      * Shares an existing backend [draftId] into the specified [roomId].
      * Endpoint: `POST /rooms/{roomId}/drafts`
      * Header: `x-user-id: {userId}`

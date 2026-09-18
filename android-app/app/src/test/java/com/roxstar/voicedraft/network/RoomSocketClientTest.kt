@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.launch
 
 class RoomSocketClientTest {
 
@@ -319,4 +320,28 @@ class RoomSocketClientTest {
         assertEquals(1, active.participants.size)
         assertEquals(1L, active.lastSequenceNumber)
     }
+
+    @Test
+    fun joinRoom_whenDisconnected_queuesRoomWithoutError() {
+        val client = RoomSocketClient()
+        var ackCalled = false
+        var ackOk = false
+        client.joinRoom("661234567890123456789012") { ok, _ ->
+            ackCalled = true
+            ackOk = ok
+        }
+        assertTrue(ackCalled)
+        assertTrue(ackOk)
+    }
+
+    @Test
+    fun leaveRoom_clearsRoomAndDisconnects() {
+        val client = RoomSocketClient()
+        client.joinRoom("661234567890123456789012")
+        client.leaveRoom("661234567890123456789012")
+        client.disconnect()
+        assertEquals(SocketConnectionState.DISCONNECTED, client.connectionState.value)
+    }
 }
+
+

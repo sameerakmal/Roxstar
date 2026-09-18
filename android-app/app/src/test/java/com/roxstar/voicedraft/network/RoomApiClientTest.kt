@@ -364,6 +364,35 @@ class RoomApiClientTest {
     }
 
     @Test
+    fun createUser_sendsCorrectRequestAndParsesUser() = runBlocking {
+        val jsonResponse = """
+            {
+                "id": "661234567890123456789099",
+                "displayName": "Guest 42",
+                "createdAt": "2026-09-17T14:00:00.000Z"
+            }
+        """.trimIndent()
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(201)
+                .setHeader("Content-Type", "application/json")
+                .setBody(jsonResponse)
+        )
+
+        val result = client.createUser("Guest 42")
+        assertTrue(result.isSuccess)
+        val user = result.getOrThrow()
+        assertEquals("661234567890123456789099", user.id)
+        assertEquals("Guest 42", user.displayName)
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/users", recorded.path)
+        assertTrue(recorded.body.readUtf8().contains("\"displayName\":\"Guest 42\""))
+    }
+
+    @Test
     fun isValidObjectId_correctlyIdentifies24CharHex() {
         assertTrue(RoomApiClient.isValidObjectId("661234567890123456789012"))
         assertTrue(RoomApiClient.isValidObjectId("abcdef1234567890abcdef12"))

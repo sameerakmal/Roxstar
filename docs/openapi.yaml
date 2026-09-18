@@ -10,7 +10,7 @@ info:
 servers:
   - url: http://localhost:3000
     description: Local development server
-  - url: https://roxstar-backend.braveocean-71fd8d06.centralindia.azurecontainerapps.io
+  - url: https://roxstar-backend.politecliff-541c339a.centralindia.azurecontainerapps.io
     description: Azure Container Apps production deployment
 
 components:

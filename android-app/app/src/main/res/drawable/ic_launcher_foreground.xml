@@ -4,16 +4,93 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Ambient glow behind microphone -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,24 a20,20 0 0 1 20,20 v10 a20,20 0 0 1 -40,0 v-10 a20,20 0 0 1 20,-20 Z" />
+        android:fillColor="#33FFFFFF"
+        android:pathData="M 54,48 m -28,0 a 28,28 0 1,0 56,0 a 28,28 0 1,0 -56,0" />
+
+    <!-- Left Outer Audio Sound Wave -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M40,58 v4 a14,14 0 0 0 28,0 v-4 h-4 v4 a10,10 0 0 1 -20,0 v-4 Z" />
+        android:strokeColor="#B3FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M 26,34 A 22,22 0 0 0 26,62" />
+
+    <!-- Left Inner Audio Sound Wave -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M52,80 h4 v8 h-4 Z" />
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M 33,40 A 14,14 0 0 0 33,56" />
+
+    <!-- Right Inner Audio Sound Wave -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M42,88 h24 v4 h-24 Z" />
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M 75,40 A 14,14 0 0 1 75,56" />
+
+    <!-- Right Outer Audio Sound Wave -->
+    <path
+        android:strokeColor="#B3FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M 82,34 A 22,22 0 0 1 82,62" />
+
+    <!-- Studio Microphone Stand Base -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M 42,76 H 66" />
+
+    <!-- Studio Microphone Stand Vertical Stem -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M 54,66 V 76" />
+
+    <!-- Studio Microphone U-shaped Cradle / Shockmount -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M 39,44 V 54 A 15,15 0 0 0 69,54 V 44" />
+
+    <!-- Studio Microphone Capsule Body (Rounded Pill) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 45,37 A 9,9 0 0 1 63,37 L 63,47 A 9,9 0 0 1 45,47 Z" />
+
+    <!-- Microphone Acoustic Mesh Grille Slits (Primary theme colored cuts) -->
+    <path
+        android:strokeColor="#F43F7F"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M 48,34 H 60" />
+    <path
+        android:strokeColor="#F43F7F"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M 47,38 H 61" />
+    <path
+        android:strokeColor="#F43F7F"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M 47,42 H 61" />
+
+    <!-- Microphone Center Band -->
+    <path
+        android:strokeColor="#E11D68"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="square"
+        android:pathData="M 45,46 H 63" />
+
+    <!-- RoxStar Sparkle Star Accent -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 78,21 Q 78,27 84,27 Q 78,27 78,33 Q 78,27 72,27 Q 78,27 78,21 Z" />
+
 </vector>

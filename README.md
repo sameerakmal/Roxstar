@@ -7,7 +7,6 @@ Planning documents: [TASKS.md](TASKS.md) (requirement checklist with assessment 
 [ARCHITECTURE.md](ARCHITECTURE.md) (system design, data model, event contracts, state machines).
 
 ## Status
-
 **Phases 1–6 are complete and verified.**
 
 | Area | Status | Verification Evidence |

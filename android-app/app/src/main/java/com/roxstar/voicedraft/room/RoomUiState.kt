@@ -3,6 +3,7 @@ package com.roxstar.voicedraft.room
 import com.roxstar.voicedraft.network.ParticipantDto
 import com.roxstar.voicedraft.network.RoomDto
 import com.roxstar.voicedraft.network.SharedDraftDto
+import java.util.UUID
 
 /**
  * Real-time connection status for the joined room.
@@ -13,6 +14,16 @@ enum class RoomConnectionStatus {
     CONNECTED,
     ERROR,
 }
+
+/**
+ * High-level user visible room timeline activity event.
+ */
+data class RoomActivityEvent(
+    val id: String = UUID.randomUUID().toString(),
+    val icon: String,
+    val text: String,
+    val timestampMs: Long = System.currentTimeMillis(),
+)
 
 /**
  * UI state for the Room screen.
@@ -32,6 +43,8 @@ data class RoomUiState(
     val participants: List<ParticipantDto> = emptyList(),
     /** Real-time and persisted drafts shared into this room. */
     val sharedDrafts: List<SharedDraftDto> = emptyList(),
+    /** Recent real-time activity events for live timeline. */
+    val activityEvents: List<RoomActivityEvent> = emptyList(),
     /** Error message to be presented to the user. */
     val errorMessage: String? = null,
     /** Transient status banner/snackbar message (e.g. user joined, draft shared). */

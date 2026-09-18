@@ -19,7 +19,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val backendBaseUrl = project.findProperty("BACKEND_BASE_URL") as? String ?: "http://10.0.2.2:3000"
+        val backendBaseUrl = project.findProperty("BACKEND_BASE_URL") as? String
+            ?: "https://roxstar-backend.politecliff-541c339a.centralindia.azurecontainerapps.io"
         buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
 
         ndk {

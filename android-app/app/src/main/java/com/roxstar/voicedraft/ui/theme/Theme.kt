@@ -11,6 +11,8 @@ fun VoiceDraftTheme(
 ) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
+        typography = RoxStarTypography,
+        shapes = RoxStarShapes,
         content = content,
     )
 }
